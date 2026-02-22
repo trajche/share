@@ -30,7 +30,7 @@ docker-run:
 
 ## Production
 build-linux:
-	GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o $(BINARY_LINUX) $(CMD)
+	GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o $(BINARY_LINUX) $(CMD)
 
 # First-time server setup (run once)
 setup-server:
@@ -41,5 +41,5 @@ setup-server:
 
 # Deploy a new binary and restart the service
 deploy: build-linux
-	scp $(BINARY_LINUX) $(SERVER):/opt/sharemk/sharemk
-	ssh $(SERVER) "systemctl restart sharemk && systemctl status sharemk --no-pager -l"
+	scp $(BINARY_LINUX) $(SERVER):/opt/sharemk/sharemk.new
+	ssh $(SERVER) "mv /opt/sharemk/sharemk.new /opt/sharemk/sharemk && systemctl restart sharemk && systemctl status sharemk --no-pager -l"

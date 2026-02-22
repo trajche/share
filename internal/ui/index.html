@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>share.mk</title>
+  <title>Share.mk — API/AI first file uploads</title>
+  <link rel="llmstxt" href="/llms.txt" />
   <script src="https://cdn.jsdelivr.net/npm/tus-js-client@3/dist/tus.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -53,6 +54,21 @@
       color: var(--muted);
       margin-top: 0.25rem;
     }
+
+    /* Footer links */
+    .footer {
+      margin-top: 1.25rem;
+      display: flex;
+      gap: 1.25rem;
+      justify-content: center;
+    }
+    .footer a {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .footer a:hover { color: var(--text); }
 
     /* Card */
     .card {
@@ -240,8 +256,8 @@
 <body>
   <div class="container">
     <header>
-      <h1>share.mk</h1>
-      <p class="subtitle">Upload and share files instantly</p>
+      <h1>Share.mk</h1>
+      <p class="subtitle">API/AI first file uploads</p>
     </header>
 
     <div class="card">
@@ -269,6 +285,12 @@
 
       <div class="file-list" id="file-list"></div>
     </div>
+
+    <nav class="footer">
+      <a href="/docs">API docs</a>
+      <a href="/openapi.json">OpenAPI</a>
+      <a href="/llms.txt">llms.txt</a>
+    </nav>
   </div>
 
   <script>

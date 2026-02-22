@@ -24,9 +24,10 @@ func New(cfg *config.Config, tusHandler *handler.Handler, limiter *ratelimit.Lim
 
 	mux.HandleFunc("GET /health", healthHandler)
 
-	// OpenAPI spec + Swagger UI.
+	// OpenAPI spec, Swagger UI, and LLM instructions.
 	mux.Handle("GET /openapi.json", openapiHandler)
 	mux.Handle("GET /docs", openapi.SwaggerUIHandler())
+	mux.Handle("GET /llms.txt", openapi.LLMsHandler())
 
 	// MCP Streamable HTTP transport (handles GET and POST).
 	mux.Handle("/mcp", mcpHandler)

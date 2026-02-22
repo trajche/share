@@ -1,0 +1,83 @@
+# share.mk
+
+> Anonymous, zero-signup file sharing with automatic expiry. No account needed. Files are stored on Scaleway S3 and deleted automatically.
+
+## Quick start for AI assistants
+
+The easiest way to use share.mk from an AI assistant is via the built-in MCP (Model Context Protocol) server.
+
+MCP endpoint: https://share.mk/mcp
+
+### MCP tools
+
+**upload_file** — Upload a file and get back a download URL
+
+Parameters:
+- filename (required): original filename, e.g. "report.pdf"
+- content (required): base64-encoded file content (standard or URL-safe encoding)
+- content_type (optional): MIME type — defaults to application/octet-stream
+- expires_in (optional): 1h | 6h | 24h | 7d | 30d — defaults to 24h
+
+Returns: { "file_id", "download_url", "expires_at", "filename", "size_bytes" }
+
+---
+
+**get_file_info** — Look up metadata for an uploaded file
+
+Parameters:
+- file_id (required): the ID returned by upload_file
+
+Returns: { "file_id", "filename", "content_type", "size_bytes", "download_url", "expires_at" }
+
+---
+
+**delete_file** — Permanently delete an uploaded file
+
+Parameters:
+- file_id (required): the ID returned by upload_file
+
+Returns: { "deleted": true, "file_id" }
+
+---
+
+## REST API
+
+Interactive docs: https://share.mk/docs
+OpenAPI 3.1 spec: https://share.mk/openapi.json
+
+Files are uploaded using the resumable upload protocol. Uploads are created with POST, data is sent with PATCH, and completed files are downloaded with GET.
+
+### Upload-Metadata header
+
+Values are base64-encoded key=value pairs, comma-separated:
+
+- filename — original filename
+- filetype — MIME type
+- expires-in — one of: 1h, 6h, 24h, 7d, 30d (defaults to 24h)
+
+### Example (curl)
+
+```bash
+# 1. Create upload (set Upload-Length to file size in bytes)
+curl -D - -X POST https://share.mk/files/ \
+  -H "Tus-Resumable: 1.0.0" \
+  -H "Upload-Length: 1234" \
+  -H "Upload-Metadata: filename cmVwb3J0LnBkZg==,expires-in MjRo"
+# → Location: https://share.mk/files/{id}
+
+# 2. Send the file bytes
+curl -X PATCH https://share.mk/files/{id} \
+  -H "Tus-Resumable: 1.0.0" \
+  -H "Upload-Offset: 0" \
+  -H "Content-Type: application/offset+octet-stream" \
+  --data-binary @report.pdf
+
+# 3. Download
+curl https://share.mk/files/{id} -o report.pdf
+```
+
+## Limits
+
+- Max file size: 10 GiB
+- Max concurrent uploads per IP: 5
+- Expiry options: 1h, 6h, 24h (default), 7d, 30d
