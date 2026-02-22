@@ -18,14 +18,20 @@ Parameters:
 - content_type (optional): MIME type — defaults to application/octet-stream
 - expires_in (optional): 1h | 6h | 24h | 7d | 30d — defaults to 24h
 
-Returns: { "file_id", "download_url", "expires_at", "filename", "size_bytes" }
+Returns: { "file_id", "management_token", "download_url", "expires_at", "filename", "size_bytes" }
+
+IMPORTANT: Save the management_token — it is only returned once and is required to call
+get_file_info or delete_file. Downloads via the download_url are public and need no token.
 
 ---
 
 **get_file_info** — Look up metadata for an uploaded file
 
+Requires the management_token issued at upload time to prove ownership.
+
 Parameters:
 - file_id (required): the ID returned by upload_file
+- management_token (required): the token returned by upload_file
 
 Returns: { "file_id", "filename", "content_type", "size_bytes", "download_url", "expires_at" }
 
@@ -33,8 +39,11 @@ Returns: { "file_id", "filename", "content_type", "size_bytes", "download_url", 
 
 **delete_file** — Permanently delete an uploaded file
 
+Requires the management_token issued at upload time to prove ownership.
+
 Parameters:
 - file_id (required): the ID returned by upload_file
+- management_token (required): the token returned by upload_file
 
 Returns: { "deleted": true, "file_id" }
 

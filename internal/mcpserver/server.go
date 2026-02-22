@@ -5,9 +5,11 @@ package mcpserver
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -104,20 +106,34 @@ func (ms *MCPServer) uploadFileTool() mcp.Tool {
 
 func (ms *MCPServer) getFileInfoTool() mcp.Tool {
 	return mcp.NewTool("get_file_info",
-		mcp.WithDescription("Return metadata and the download URL for a previously uploaded file."),
+		mcp.WithDescription(
+			"Return metadata and the download URL for a previously uploaded file. "+
+				"Requires the management_token returned by upload_file.",
+		),
 		mcp.WithString("file_id",
 			mcp.Required(),
 			mcp.Description("The file ID returned by upload_file"),
+		),
+		mcp.WithString("management_token",
+			mcp.Required(),
+			mcp.Description("The management token returned by upload_file — proves ownership"),
 		),
 	)
 }
 
 func (ms *MCPServer) deleteFileTool() mcp.Tool {
 	return mcp.NewTool("delete_file",
-		mcp.WithDescription("Permanently delete an uploaded file."),
+		mcp.WithDescription(
+			"Permanently delete an uploaded file. "+
+				"Requires the management_token returned by upload_file.",
+		),
 		mcp.WithString("file_id",
 			mcp.Required(),
 			mcp.Description("The file ID returned by upload_file"),
+		),
+		mcp.WithString("management_token",
+			mcp.Required(),
+			mcp.Description("The management token returned by upload_file — proves ownership"),
 		),
 	)
 }
@@ -172,6 +188,16 @@ func (ms *MCPServer) handleUploadFile(ctx context.Context, req mcp.CallToolReque
 	key := ms.cfg.S3ObjectPrefix + objectId
 	expiresAt := time.Now().UTC().Add(dur).Format(time.RFC3339)
 
+	// Generate a cryptographically random management token (256-bit entropy).
+	// This is the only mechanism that proves upload ownership for the
+	// get_file_info and delete_file tools.  It is returned once here and
+	// never exposed again — not even by get_file_info.
+	mgmtToken, err := generateToken()
+	if err != nil {
+		slog.Error("mcp: upload_file failed to generate management token", "error", err)
+		return mcp.NewToolResultError("internal error generating management token"), nil
+	}
+
 	opCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -201,6 +227,9 @@ func (ms *MCPServer) handleUploadFile(ctx context.Context, req mcp.CallToolReque
 			"filename":   filename,
 			"filetype":   contentType,
 			"expires-in": expiresIn,
+			// mgmt-token is stored server-side only and never returned by
+			// any endpoint except this upload response.
+			"mgmt-token": mgmtToken,
 		},
 		Storage: map[string]string{
 			"Type":   "s3store",
@@ -245,38 +274,51 @@ func (ms *MCPServer) handleUploadFile(ctx context.Context, req mcp.CallToolReque
 	downloadURL := strings.TrimRight(ms.cfg.PublicURL, "/") + ms.cfg.TUSBasePath + tusID
 
 	result := map[string]any{
-		"file_id":      tusID,
-		"download_url": downloadURL,
-		"expires_at":   expiresAt,
-		"filename":     filename,
-		"size_bytes":   size,
+		"file_id":          tusID,
+		"management_token": mgmtToken,
+		"download_url":     downloadURL,
+		"expires_at":       expiresAt,
+		"filename":         filename,
+		"size_bytes":       size,
 	}
 	return toolResultJSON(result)
 }
 
 func (ms *MCPServer) handleGetFileInfo(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	id, _ := req.GetArguments()["file_id"].(string)
+	args := req.GetArguments()
+
+	id, _ := args["file_id"].(string)
 	if id == "" {
 		return mcp.NewToolResultError("file_id is required"), nil
 	}
+
+	providedToken, _ := args["management_token"].(string)
 
 	key := ms.objectKey(id)
 	opCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Read the .info file to get metadata.
+	// Read the .info file.  Use the same error for "not found" and "wrong
+	// token" to prevent callers from enumerating valid file IDs.
 	out, err := ms.s3Client.GetObject(opCtx, &s3.GetObjectInput{
 		Bucket: aws.String(ms.cfg.S3Bucket),
 		Key:    aws.String(key + ".info"),
 	})
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("file not found: %s", id)), nil
+		return mcp.NewToolResultError("invalid file_id or management_token"), nil
 	}
 	defer out.Body.Close()
 
 	var info fileInfo
 	if err := json.NewDecoder(out.Body).Decode(&info); err != nil {
-		return mcp.NewToolResultError("failed to read file metadata"), nil
+		return mcp.NewToolResultError("invalid file_id or management_token"), nil
+	}
+
+	// Constant-time comparison prevents timing-oracle attacks on the token.
+	// Same error whether the file doesn't exist, has no token, or the token
+	// doesn't match.
+	if !tokenMatches(info.MetaData["mgmt-token"], providedToken) {
+		return mcp.NewToolResultError("invalid file_id or management_token"), nil
 	}
 
 	// Read expiry tag.
@@ -294,8 +336,9 @@ func (ms *MCPServer) handleGetFileInfo(ctx context.Context, req mcp.CallToolRequ
 		}
 	}
 
-	downloadURL := strings.TrimRight(ms.cfg.PublicURL, "/") + ms.cfg.TUSBasePath + id
+	downloadURL := strings.TrimRight(ms.cfg.PublicURL, "/") + ms.cfg.TUSBasePath + info.ID
 
+	// Never return the stored mgmt-token in responses.
 	result := map[string]any{
 		"file_id":      info.ID,
 		"filename":     info.MetaData["filename"],
@@ -308,16 +351,41 @@ func (ms *MCPServer) handleGetFileInfo(ctx context.Context, req mcp.CallToolRequ
 }
 
 func (ms *MCPServer) handleDeleteFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	id, _ := req.GetArguments()["file_id"].(string)
+	args := req.GetArguments()
+
+	id, _ := args["file_id"].(string)
 	if id == "" {
 		return mcp.NewToolResultError("file_id is required"), nil
 	}
+
+	providedToken, _ := args["management_token"].(string)
 
 	key := ms.objectKey(id)
 	opCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	_, err := ms.s3Client.DeleteObjects(opCtx, &s3.DeleteObjectsInput{
+	// Verify ownership before deleting.  Read the .info file to get the
+	// stored token.  Same error for "not found" vs "wrong token" to prevent
+	// file-ID enumeration via the delete endpoint.
+	out, err := ms.s3Client.GetObject(opCtx, &s3.GetObjectInput{
+		Bucket: aws.String(ms.cfg.S3Bucket),
+		Key:    aws.String(key + ".info"),
+	})
+	if err != nil {
+		return mcp.NewToolResultError("invalid file_id or management_token"), nil
+	}
+	defer out.Body.Close()
+
+	var info fileInfo
+	if err := json.NewDecoder(out.Body).Decode(&info); err != nil {
+		return mcp.NewToolResultError("invalid file_id or management_token"), nil
+	}
+
+	if !tokenMatches(info.MetaData["mgmt-token"], providedToken) {
+		return mcp.NewToolResultError("invalid file_id or management_token"), nil
+	}
+
+	_, err = ms.s3Client.DeleteObjects(opCtx, &s3.DeleteObjectsInput{
 		Bucket: aws.String(ms.cfg.S3Bucket),
 		Delete: &s3types.Delete{
 			Objects: []s3types.ObjectIdentifier{
@@ -337,6 +405,28 @@ func (ms *MCPServer) handleDeleteFile(ctx context.Context, req mcp.CallToolReque
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// generateToken returns a cryptographically random 32-byte token as a
+// lowercase hex string (64 characters, 256-bit entropy).
+func generateToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// tokenMatches compares stored and provided tokens in constant time to
+// prevent timing-oracle attacks.  Both strings must be non-empty AND equal
+// for the function to return true.  Using crypto/subtle instead of == or
+// strings.Compare ensures the comparison time does not leak information
+// about how many characters matched.
+func tokenMatches(stored, provided string) bool {
+	if stored == "" || provided == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(stored), []byte(provided)) == 1
+}
 
 // objectKey converts a tus upload ID (possibly in "objectId+multipartId"
 // format) to the S3 object key for the data file.
