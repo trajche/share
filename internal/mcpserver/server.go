@@ -163,8 +163,13 @@ func (ms *MCPServer) handleUploadFile(ctx context.Context, req mcp.CallToolReque
 		return mcp.NewToolResultError("expires_in must be one of: 1h, 6h, 24h, 7d, 30d"), nil
 	}
 
-	id := uuid.New().String()
-	key := ms.cfg.S3ObjectPrefix + id
+	objectId := uuid.New().String()
+	// tusd's s3store.GetUpload splits the ID on '+' and requires both parts
+	// to be non-empty (objectId + multipartId).  Using a plain UUID results
+	// in an empty multipartId and an immediate ErrNotFound.  Appending
+	// "+mcp" satisfies the check while clearly marking MCP-originated files.
+	tusID := objectId + "+mcp"
+	key := ms.cfg.S3ObjectPrefix + objectId
 	expiresAt := time.Now().UTC().Add(dur).Format(time.RFC3339)
 
 	opCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -186,8 +191,10 @@ func (ms *MCPServer) handleUploadFile(ctx context.Context, req mcp.CallToolReque
 
 	// Create the tusd-compatible .info file so the GET /files/{id} handler
 	// can serve the file without knowing it was uploaded via MCP.
+	// The ID field must be the full tus ID (objectId+multipartId) so that
+	// tusd's s3store.GetUpload can look it up by the URL path segment.
 	info := fileInfo{
-		ID:     id,
+		ID:     tusID,
 		Size:   size,
 		Offset: size,
 		MetaData: map[string]string{
@@ -235,10 +242,10 @@ func (ms *MCPServer) handleUploadFile(ctx context.Context, req mcp.CallToolReque
 		}
 	}
 
-	downloadURL := strings.TrimRight(ms.cfg.PublicURL, "/") + ms.cfg.TUSBasePath + id
+	downloadURL := strings.TrimRight(ms.cfg.PublicURL, "/") + ms.cfg.TUSBasePath + tusID
 
 	result := map[string]any{
-		"file_id":      id,
+		"file_id":      tusID,
 		"download_url": downloadURL,
 		"expires_at":   expiresAt,
 		"filename":     filename,
@@ -253,7 +260,7 @@ func (ms *MCPServer) handleGetFileInfo(ctx context.Context, req mcp.CallToolRequ
 		return mcp.NewToolResultError("file_id is required"), nil
 	}
 
-	key := ms.cfg.S3ObjectPrefix + id
+	key := ms.objectKey(id)
 	opCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -290,7 +297,7 @@ func (ms *MCPServer) handleGetFileInfo(ctx context.Context, req mcp.CallToolRequ
 	downloadURL := strings.TrimRight(ms.cfg.PublicURL, "/") + ms.cfg.TUSBasePath + id
 
 	result := map[string]any{
-		"file_id":      id,
+		"file_id":      info.ID,
 		"filename":     info.MetaData["filename"],
 		"content_type": info.MetaData["filetype"],
 		"size_bytes":   info.Size,
@@ -306,7 +313,7 @@ func (ms *MCPServer) handleDeleteFile(ctx context.Context, req mcp.CallToolReque
 		return mcp.NewToolResultError("file_id is required"), nil
 	}
 
-	key := ms.cfg.S3ObjectPrefix + id
+	key := ms.objectKey(id)
 	opCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -330,6 +337,16 @@ func (ms *MCPServer) handleDeleteFile(ctx context.Context, req mcp.CallToolReque
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// objectKey converts a tus upload ID (possibly in "objectId+multipartId"
+// format) to the S3 object key for the data file.
+func (ms *MCPServer) objectKey(id string) string {
+	objectId := id
+	if i := strings.IndexByte(id, '+'); i >= 0 {
+		objectId = id[:i]
+	}
+	return ms.cfg.S3ObjectPrefix + objectId
+}
 
 func toolResultJSON(v any) (*mcp.CallToolResult, error) {
 	b, err := json.MarshalIndent(v, "", "  ")
