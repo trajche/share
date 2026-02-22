@@ -1,0 +1,216 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "share.mk",
+    "description": "Anonymous resumable file upload service backed by Scaleway S3.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://share.mk",
+      "description": "Production"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health check",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "example": "ok" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/files/": {
+      "post": {
+        "summary": "Create upload",
+        "description": "Initiate a new resumable upload. Pass `Upload-Metadata` header with base64-encoded key=value pairs. Supported metadata keys: `filename`, `content-type`, `expires-in` (one of 1h, 6h, 24h, 7d, 30d; defaults to 24h).",
+        "operationId": "createUpload",
+        "parameters": [
+          {
+            "name": "Tus-Resumable",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "enum": ["1.0.0"] }
+          },
+          {
+            "name": "Upload-Length",
+            "in": "header",
+            "description": "Total upload size in bytes",
+            "schema": { "type": "integer" }
+          },
+          {
+            "name": "Upload-Defer-Length",
+            "in": "header",
+            "description": "Set to 1 to defer the upload length",
+            "schema": { "type": "integer", "enum": [1] }
+          },
+          {
+            "name": "Upload-Metadata",
+            "in": "header",
+            "description": "Comma-separated list of base64-encoded metadata pairs",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Upload created",
+            "headers": {
+              "Location": {
+                "description": "URL of the created upload",
+                "schema": { "type": "string" }
+              }
+            }
+          },
+          "400": { "description": "Invalid metadata (e.g. bad expires-in value)" },
+          "413": { "description": "Upload size exceeds server limit" },
+          "429": { "description": "Rate limit exceeded" }
+        }
+      }
+    },
+    "/files/{id}": {
+      "head": {
+        "summary": "Check upload status",
+        "operationId": "getUploadStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "Tus-Resumable",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "enum": ["1.0.0"] }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Upload info",
+            "headers": {
+              "Upload-Offset": { "schema": { "type": "integer" } },
+              "Upload-Length": { "schema": { "type": "integer" } }
+            }
+          },
+          "404": { "description": "Upload not found" }
+        }
+      },
+      "patch": {
+        "summary": "Upload chunk",
+        "operationId": "uploadChunk",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "Tus-Resumable",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "enum": ["1.0.0"] }
+          },
+          {
+            "name": "Upload-Offset",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "integer" }
+          },
+          {
+            "name": "Content-Type",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "enum": ["application/offset+octet-stream"] }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/offset+octet-stream": {
+              "schema": { "type": "string", "format": "binary" }
+            }
+          }
+        },
+        "responses": {
+          "204": { "description": "Chunk accepted" },
+          "409": { "description": "Offset mismatch" },
+          "429": { "description": "Rate limit exceeded" }
+        }
+      },
+      "get": {
+        "summary": "Download file",
+        "operationId": "downloadFile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File content",
+            "content": { "*/*": { "schema": { "type": "string", "format": "binary" } } }
+          },
+          "404": { "description": "File not found or expired" }
+        }
+      },
+      "delete": {
+        "summary": "Delete upload",
+        "operationId": "deleteUpload",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "Tus-Resumable",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "enum": ["1.0.0"] }
+          }
+        ],
+        "responses": {
+          "204": { "description": "Upload deleted" },
+          "404": { "description": "Upload not found" }
+        }
+      }
+    },
+    "/mcp": {
+      "post": {
+        "summary": "MCP Streamable HTTP endpoint",
+        "description": "Model Context Protocol endpoint for AI assistants. Supports upload_file, get_file_info, and delete_file tools.",
+        "operationId": "mcp",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "MCP response" }
+        }
+      }
+    }
+  }
+}

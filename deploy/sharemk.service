@@ -1,0 +1,24 @@
+[Unit]
+Description=share.mk resumable upload service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=sharemk
+Group=sharemk
+WorkingDirectory=/opt/sharemk
+EnvironmentFile=/opt/sharemk/.env
+ExecStart=/opt/sharemk/sharemk
+Restart=on-failure
+RestartSec=5s
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/sharemk
+
+[Install]
+WantedBy=multi-user.target

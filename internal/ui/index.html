@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>share.mk</title>
+  <script src="https://cdn.jsdelivr.net/npm/tus-js-client@3/dist/tus.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:         #fafafa;
+      --card:       #ffffff;
+      --border:     #e4e4e7;
+      --border-hover: #a1a1aa;
+      --text:       #09090b;
+      --muted:      #71717a;
+      --subtle:     #f4f4f5;
+      --primary:    #18181b;
+      --primary-fg: #fafafa;
+      --success:    #16a34a;
+      --error:      #dc2626;
+      --radius:     0.5rem;
+      --radius-lg:  0.75rem;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 480px;
+    }
+
+    /* Header */
+    header { margin-bottom: 1.75rem; }
+    h1 {
+      font-size: 1.375rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+    .subtitle {
+      font-size: 0.875rem;
+      color: var(--muted);
+      margin-top: 0.25rem;
+    }
+
+    /* Card */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 1.5rem;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 1px 8px rgba(0,0,0,0.03);
+    }
+
+    /* Expiry pills */
+    .section-label {
+      font-size: 0.6875rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.5rem;
+    }
+    .pills {
+      display: flex;
+      gap: 0.375rem;
+      margin-bottom: 1.25rem;
+      flex-wrap: wrap;
+    }
+    .pill {
+      padding: 0.3rem 0.75rem;
+      border-radius: 9999px;
+      border: 1px solid var(--border);
+      font-size: 0.8125rem;
+      font-weight: 500;
+      cursor: pointer;
+      background: none;
+      color: var(--muted);
+      transition: border-color 0.1s, color 0.1s, background 0.1s;
+    }
+    .pill:hover { border-color: var(--border-hover); color: var(--text); }
+    .pill.active {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: var(--primary-fg);
+    }
+
+    /* Drop zone */
+    .dropzone {
+      position: relative;
+      border: 1.5px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 2.5rem 1.5rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+      user-select: none;
+    }
+    .dropzone:hover,
+    .dropzone.drag-over {
+      border-color: var(--primary);
+      background: #f9f9f9;
+    }
+    .dropzone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+    .dz-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 2.5rem;
+      height: 2.5rem;
+      background: var(--subtle);
+      border-radius: 0.5rem;
+      margin-bottom: 0.75rem;
+      color: var(--muted);
+    }
+    .dz-title {
+      font-size: 0.9375rem;
+      font-weight: 500;
+    }
+    .dz-sub {
+      font-size: 0.8125rem;
+      color: var(--muted);
+      margin-top: 0.25rem;
+    }
+
+    /* File list */
+    .file-list {
+      margin-top: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    /* File item */
+    .file-item {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.75rem 0.875rem;
+      animation: slide-in 0.15s ease;
+    }
+    @keyframes slide-in {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .file-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .file-icon { color: var(--muted); flex-shrink: 0; }
+    .file-name {
+      font-size: 0.875rem;
+      font-weight: 500;
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .file-size {
+      font-size: 0.75rem;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+
+    /* Progress */
+    .progress-track {
+      height: 3px;
+      background: var(--subtle);
+      border-radius: 9999px;
+      overflow: hidden;
+      margin-bottom: 0.4rem;
+    }
+    .progress-fill {
+      height: 100%;
+      background: var(--primary);
+      border-radius: 9999px;
+      width: 0%;
+      transition: width 0.2s ease;
+    }
+    .file-status { font-size: 0.75rem; color: var(--muted); }
+
+    /* URL result row */
+    .url-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.375rem;
+      padding: 0.375rem 0.5rem;
+      background: var(--subtle);
+      border-radius: 0.375rem;
+    }
+    .url-text {
+      font-size: 0.75rem;
+      font-family: ui-monospace, 'SF Mono', monospace;
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--text);
+    }
+    .copy-btn {
+      padding: 0.2rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 0.3rem;
+      font-size: 0.6875rem;
+      font-weight: 500;
+      background: var(--card);
+      cursor: pointer;
+      color: var(--text);
+      transition: background 0.1s;
+      flex-shrink: 0;
+    }
+    .copy-btn:hover { background: var(--border); }
+    .copy-btn.copied { color: var(--success); border-color: var(--success); }
+
+    .text-success { color: var(--success); }
+    .text-error   { color: var(--error); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>share.mk</h1>
+      <p class="subtitle">Upload and share files instantly</p>
+    </header>
+
+    <div class="card">
+      <p class="section-label">Expires in</p>
+      <div class="pills">
+        <button class="pill" data-value="1h">1h</button>
+        <button class="pill" data-value="6h">6h</button>
+        <button class="pill active" data-value="24h">24h</button>
+        <button class="pill" data-value="7d">7d</button>
+        <button class="pill" data-value="30d">30d</button>
+      </div>
+
+      <div class="dropzone" id="dropzone">
+        <input type="file" id="file-input" multiple />
+        <div class="dz-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+        </div>
+        <p class="dz-title">Drop files here</p>
+        <p class="dz-sub">or click to browse</p>
+      </div>
+
+      <div class="file-list" id="file-list"></div>
+    </div>
+  </div>
+
+  <script>
+    let expiresIn = '24h'
+
+    // Expiry pills
+    document.querySelectorAll('.pill').forEach(pill => {
+      pill.addEventListener('click', () => {
+        document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'))
+        pill.classList.add('active')
+        expiresIn = pill.dataset.value
+      })
+    })
+
+    // Drag & drop
+    const dropzone = document.getElementById('dropzone')
+    const fileInput = document.getElementById('file-input')
+
+    dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag-over') })
+    dropzone.addEventListener('dragleave', e => { if (!dropzone.contains(e.relatedTarget)) dropzone.classList.remove('drag-over') })
+    dropzone.addEventListener('drop', e => {
+      e.preventDefault()
+      dropzone.classList.remove('drag-over')
+      upload(Array.from(e.dataTransfer.files))
+    })
+    fileInput.addEventListener('change', () => {
+      upload(Array.from(fileInput.files))
+      fileInput.value = ''
+    })
+
+    function fmt(bytes) {
+      if (!bytes) return '0 B'
+      const u = ['B','KB','MB','GB'], i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), 3)
+      return (bytes / 1024 ** i).toFixed(i ? 1 : 0) + ' ' + u[i]
+    }
+
+    function upload(files) { files.forEach(uploadOne) }
+
+    function uploadOne(file) {
+      const id  = crypto.randomUUID()
+      const el  = document.createElement('div')
+      el.className = 'file-item'
+      el.id = 'item-' + id
+      el.innerHTML = `
+        <div class="file-row">
+          <svg class="file-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+          </svg>
+          <span class="file-name" title="${esc(file.name)}">${esc(file.name)}</span>
+          <span class="file-size">${fmt(file.size)}</span>
+        </div>
+        <div class="progress-track" id="pt-${id}"><div class="progress-fill" id="pf-${id}"></div></div>
+        <div class="file-status" id="st-${id}">Starting…</div>
+      `
+      document.getElementById('file-list').prepend(el)
+
+      const tusUpload = new tus.Upload(file, {
+        endpoint: '/files/',
+        chunkSize: 5 * 1024 * 1024,
+        retryDelays: [0, 1000, 3000],
+        metadata: {
+          filename: file.name,
+          filetype: file.type || 'application/octet-stream',
+          'expires-in': expiresIn,
+        },
+        onProgress(sent, total) {
+          const pct = total ? Math.round(sent / total * 100) : 0
+          document.getElementById('pf-' + id).style.width = pct + '%'
+          document.getElementById('st-' + id).textContent = pct + '%'
+        },
+        onSuccess() {
+          document.getElementById('pt-' + id).style.display = 'none'
+          document.getElementById('st-' + id).innerHTML =
+            `<span class="text-success">✓ Uploaded</span>` +
+            `<div class="url-row">` +
+              `<span class="url-text" title="${esc(tusUpload.url)}">${esc(tusUpload.url)}</span>` +
+              `<button class="copy-btn" id="cp-${id}">Copy</button>` +
+            `</div>`
+          document.getElementById('cp-' + id).addEventListener('click', () => copyURL(tusUpload.url, id))
+        },
+        onError(err) {
+          document.getElementById('pt-' + id).style.display = 'none'
+          document.getElementById('st-' + id).innerHTML =
+            `<span class="text-error">Upload failed — ${esc(err.message)}</span>`
+        },
+      })
+      tusUpload.start()
+    }
+
+    function copyURL(url, id) {
+      navigator.clipboard.writeText(url).then(() => {
+        const btn = document.getElementById('cp-' + id)
+        btn.textContent = 'Copied!'
+        btn.classList.add('copied')
+        setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied') }, 2000)
+      })
+    }
+
+    function esc(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+    }
+  </script>
+</body>
+</html>
