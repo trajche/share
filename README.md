@@ -87,12 +87,31 @@ make run
 
 Pre-built binaries for Linux amd64 and arm64 are on the [releases page](https://github.com/trajche/share/releases).
 
-The [`deploy/`](deploy/) directory contains a systemd unit file and a setup script that installs Caddy and configures the service. Run once on a fresh server:
+The [`deploy/`](deploy/) directory contains a setup script that installs Caddy, creates a `sharemk` system user, and configures the systemd service. Run once on a fresh Debian/Ubuntu server:
 
 ```bash
 make setup-server        # SSH in and run deploy/setup.sh
 scp .env root@yourserver:/opt/sharemk/.env
-make deploy              # cross-compile + scp + systemctl restart
+make deploy              # cross-compile arm64 + scp + systemctl restart
+```
+
+To deploy amd64 instead, run `make deploy-amd64` (or `make deploy BINARY_DEPLOY=$(BINARY_AMD64)`).
+
+#### Service management
+
+The systemd unit (`/etc/systemd/system/sharemk.service`) is configured to:
+
+- **Always restart** (`Restart=always`) — recovers from crashes, OOM kills, and clean exits
+- **Wait for network** (`After=network-online.target`) — ensures S3 connectivity before starting
+- **Limit restart rate** (`StartLimitBurst=5` per 60 s) — prevents a crash loop from spinning
+- **Restart delay** of 5 s between attempts
+
+Both `sharemk` and `caddy` are enabled at boot (`systemctl enable`). Check their status with:
+
+```bash
+systemctl status sharemk caddy
+journalctl -u sharemk -f    # follow sharemk logs
+journalctl -u caddy -f      # follow caddy logs
 ```
 
 ---

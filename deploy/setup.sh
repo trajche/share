@@ -30,8 +30,10 @@ echo "==> Installing systemd service..."
 cat > /etc/systemd/system/sharemk.service <<'SERVICE'
 [Unit]
 Description=share.mk resumable upload service
-After=network.target
-Wants=network.target
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -40,7 +42,7 @@ Group=sharemk
 WorkingDirectory=/opt/sharemk
 EnvironmentFile=/opt/sharemk/.env
 ExecStart=/opt/sharemk/sharemk
-Restart=on-failure
+Restart=always
 RestartSec=5s
 NoNewPrivileges=true
 ProtectSystem=strict
