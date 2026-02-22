@@ -22,11 +22,15 @@ import (
 	"sharemk/internal/server"
 )
 
+// version is set at build time via -ldflags "-X main.version=v1.2.3".
+var version = "dev"
+
 func main() {
 	// 1. Load configuration.
 	cfg := config.Load()
 
 	setupLogger(cfg.LogLevel)
+	slog.Info("starting share.mk", "version", version)
 
 	// 2. Build S3 client.
 	s3Client, err := s3client.New(cfg)
