@@ -56,6 +56,18 @@ SERVICE
 systemctl daemon-reload
 systemctl enable sharemk
 
+echo "==> Configuring Caddy restart policy..."
+mkdir -p /etc/systemd/system/caddy.service.d
+cat > /etc/systemd/system/caddy.service.d/restart.conf <<'DROPIN'
+[Unit]
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Restart=always
+RestartSec=5s
+DROPIN
+
 echo "==> Installing Caddyfile..."
 cat > /etc/caddy/Caddyfile <<'CADDY'
 share.mk {
@@ -63,6 +75,7 @@ share.mk {
     reverse_proxy localhost:8080
 }
 CADDY
+systemctl daemon-reload
 systemctl enable caddy
 systemctl reload-or-restart caddy
 

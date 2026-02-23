@@ -95,7 +95,7 @@ scp .env root@yourserver:/opt/sharemk/.env
 make deploy              # cross-compile arm64 + scp + systemctl restart
 ```
 
-To deploy amd64 instead, run `make deploy-amd64` (or `make deploy BINARY_DEPLOY=$(BINARY_AMD64)`).
+To deploy to an amd64 server, update `BINARY_ARM64` → `BINARY_AMD64` in the `deploy` Makefile target, or just `scp` the amd64 binary manually from the [releases page](https://github.com/trajche/share/releases).
 
 #### Service management
 
