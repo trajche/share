@@ -37,7 +37,7 @@ func New(cfg *config.Config, tusHandler *handler.Handler, limiter *ratelimit.Lim
 	// path prefix before handing off so tusd sees "/" not "/files/".
 	tusPrefix := strings.TrimSuffix(cfg.TUSBasePath, "/") // "/files/" → "/files"
 	strippedTus := http.StripPrefix(tusPrefix, tusHandler)
-	mux.Handle("/files/", limiter.Middleware(strippedTus))
+	mux.Handle("/files/", limiter.Middleware(inlineDisposition(strippedTus)))
 
 	return &Server{cfg: cfg, handler: mux}
 }
@@ -49,4 +49,44 @@ func (s *Server) Handler() http.Handler {
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// inlineDisposition wraps a handler and rewrites Content-Disposition from
+// "attachment" to "inline" on GET responses so that AI tools and browsers
+// render the file content directly instead of treating it as a binary download.
+func inlineDisposition(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			next.ServeHTTP(w, r)
+			return
+		}
+		next.ServeHTTP(&inlineWriter{ResponseWriter: w}, r)
+	})
+}
+
+// inlineWriter intercepts WriteHeader to rewrite Content-Disposition before
+// the response is sent. Go's http.ResponseWriter does not allow header changes
+// after WriteHeader, so we must intercept it.
+type inlineWriter struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (w *inlineWriter) WriteHeader(code int) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+		h := w.ResponseWriter.Header()
+		cd := h.Get("Content-Disposition")
+		if strings.HasPrefix(cd, "attachment") {
+			h.Set("Content-Disposition", "inline"+strings.TrimPrefix(cd, "attachment"))
+		}
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *inlineWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(b)
 }
