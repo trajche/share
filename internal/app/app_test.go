@@ -802,3 +802,67 @@ func TestMediaIsNotSandboxed(t *testing.T) {
 		}
 	}
 }
+
+func TestMCPBodyLimit(t *testing.T) {
+	e := newEnv(t)
+	m := e.mcp()
+
+	// 1 MiB cap in tests: a ~2 MiB base64 payload is refused up front.
+	big := base64.StdEncoding.EncodeToString(make([]byte, 1536<<10))
+	body, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0", "id": 99, "method": "tools/call",
+		"params": map[string]any{"name": "upload_file", "arguments": map[string]any{"filename": "big.bin", "content": big}},
+	})
+	resp := m.post(string(body))
+	expectStatus(t, resp, http.StatusRequestEntityTooLarge)
+	if keys := e.bucketKeys(); len(keys) != 0 {
+		t.Errorf("oversized MCP upload stored objects: %v", keys)
+	}
+
+	// Small calls still work on the same session.
+	if _, errText := m.call("upload_file", map[string]any{
+		"filename": "small.txt", "content": base64.StdEncoding.EncodeToString([]byte("ok")),
+	}); errText != "" {
+		t.Fatal(errText)
+	}
+}
+
+func TestMCPHasItsOwnConcurrencyLimit(t *testing.T) {
+	e := newEnv(t)
+	m := e.mcp()
+
+	// Hold two MCP POSTs open (the per-IP MCP limit in tests) by streaming
+	// their bodies slowly, then check a third is rejected while uploads
+	// through tus are unaffected.
+	var writers []*io.PipeWriter
+	done := make(chan struct{}, 2)
+	for range 2 {
+		pr, pw := io.Pipe()
+		writers = append(writers, pw)
+		req, _ := http.NewRequest(http.MethodPost, e.srv.URL+"/mcp", pr)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("Mcp-Session-Id", m.sid)
+		go func() {
+			if resp, err := e.client.Do(req); err == nil {
+				resp.Body.Close()
+			}
+			done <- struct{}{}
+		}()
+		pw.Write([]byte(`{"jsonrpc":"2.0",`)) //nolint:errcheck
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	resp := m.post(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	expectStatus(t, resp, http.StatusTooManyRequests)
+
+	e.upload("tus is separate", nil)
+
+	for _, pw := range writers {
+		pw.Write([]byte(`"id":2,"method":"tools/list"}`)) //nolint:errcheck
+		pw.Close()
+	}
+	<-done
+	<-done
+	expectStatus(t, m.post(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`), http.StatusOK)
+}

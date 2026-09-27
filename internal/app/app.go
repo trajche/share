@@ -60,8 +60,11 @@ func New(cfg *config.Config, s3Client *s3.Client) (*App, error) {
 	}
 
 	mcpSrv := mcpserver.New(cfg, fileService)
-	limiter := ratelimit.New(cfg.RateLimitGlobal, cfg.RateLimitPerIP)
-	srv := server.New(cfg, fileService, tusHandler, limiter, mcpSrv.Handler(), openapi.Handler())
+	limiter := ratelimit.New(cfg.RateLimitGlobal, cfg.RateLimitPerIP, cfg.TrustedProxies)
+	// MCP uploads are decoded in memory, so they get their own, smaller
+	// concurrency budget on top of the per-request body cap.
+	mcpLimiter := ratelimit.New(cfg.MCPRateLimitGlobal, cfg.MCPRateLimitPerIP, cfg.TrustedProxies)
+	srv := server.New(cfg, fileService, tusHandler, limiter, mcpLimiter.Middleware(mcpSrv.Handler()), openapi.Handler())
 
 	return &App{
 		Handler: srv.Handler(),

@@ -44,16 +44,19 @@ func main() {
 	go application.ProcessCompletions(ctx)
 
 	// 5. Start background expiry worker.
-	expiryWorker := expiry.New(cfg, s3Client)
+	expiryWorker := expiry.New(cfg, s3Client, application.Files)
 	go expiryWorker.Start(ctx)
 
 	// 6. HTTP server.
 	httpServer := &http.Server{
-		Addr:         cfg.ServerAddr,
-		Handler:      application.Handler,
-		ReadTimeout:  0, // no read timeout — large uploads need unlimited time
-		WriteTimeout: 0,
-		IdleTimeout:  120 * time.Second,
+		Addr:    cfg.ServerAddr,
+		Handler: application.Handler,
+		// Headers must arrive promptly (slowloris protection); bodies may
+		// take as long as they need because large uploads are slow.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       0,
+		WriteTimeout:      0,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// 7. Graceful shutdown on SIGTERM / SIGINT.
@@ -71,14 +74,15 @@ func main() {
 	<-quit
 	slog.Info("shutting down...")
 
-	cancel()
-
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
+	// Stop accepting requests first so uploads finishing during shutdown
+	// still reach ProcessCompletions and get their expiry tag.
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)
 	}
+	cancel()
 
 	slog.Info("server stopped")
 }

@@ -6,8 +6,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -46,6 +48,12 @@ func NewS3(t *testing.T) (*s3.Client, *config.Config) {
 		PublicURL:       "https://share.test",
 		RateLimitGlobal: 50,
 		RateLimitPerIP:  5,
+
+		TrustedProxies:      []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")},
+		MCPMaxBodyBytes:     1 << 20,
+		MCPRateLimitGlobal:  10,
+		MCPRateLimitPerIP:   2,
+		IncompleteUploadTTL: 48 * time.Hour,
 	}
 	return client, cfg
 }

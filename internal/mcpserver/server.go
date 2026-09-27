@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -48,8 +49,19 @@ func New(cfg *config.Config, fs *files.Service) *MCPServer {
 }
 
 // Handler returns an http.Handler for the MCP Streamable HTTP transport.
+// Request bodies are capped at MCPMaxBodyBytes because tool arguments
+// (base64 file content) are decoded in memory.
 func (ms *MCPServer) Handler() http.Handler {
-	return server.NewStreamableHTTPServer(ms.mcp)
+	next := server.NewStreamableHTTPServer(ms.mcp)
+	limit := ms.cfg.MCPMaxBodyBytes
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength > limit {
+			http.Error(w, fmt.Sprintf("request body too large (max %d bytes); use the tus endpoint for large files", limit), http.StatusRequestEntityTooLarge)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // ---------------------------------------------------------------------------

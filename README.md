@@ -107,9 +107,14 @@ make run
 | `PUBLIC_URL` | | `http://localhost:8080` | Public base URL (used in MCP download URLs) |
 | `TUS_BASE_PATH` | | `/files/` | Base path for tus endpoints |
 | `TUS_MAX_SIZE` | | `10737418240` | Max upload size in bytes (10 GiB) |
-| `SERVER_ADDR` | | `:8080` | Listen address |
+| `SERVER_ADDR` | | `:8080` | Listen address. Behind a local reverse proxy use `127.0.0.1:8080` so the app is not reachable directly. |
 | `RATE_LIMIT_GLOBAL` | | `50` | Max concurrent uploads globally |
 | `RATE_LIMIT_PER_IP` | | `5` | Max concurrent uploads per IP |
+| `TRUSTED_PROXIES` | | `127.0.0.1/32,::1/128` | Comma-separated IPs/CIDRs whose `X-Forwarded-For` is trusted for the client IP. Set empty to trust none. |
+| `MCP_MAX_BODY_BYTES` | | `16777216` | Max MCP request body (base64 file content is decoded in memory) |
+| `MCP_RATE_LIMIT_GLOBAL` | | `10` | Max concurrent MCP requests globally |
+| `MCP_RATE_LIMIT_PER_IP` | | `2` | Max concurrent MCP requests per IP |
+| `INCOMPLETE_UPLOAD_TTL` | | `48h` | Unfinished uploads idle longer than this are removed and their multipart uploads aborted |
 | `LOG_LEVEL` | | `info` | `debug` \| `info` \| `warn` \| `error` |
 
 ### Production deployment
