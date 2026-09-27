@@ -2,9 +2,8 @@ package hooks
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -12,54 +11,77 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/tus/tusd/v2/pkg/handler"
 	"sharemk/internal/config"
+	"sharemk/internal/files"
 )
 
-var validExpiries = map[string]time.Duration{
-	"1h":  1 * time.Hour,
-	"6h":  6 * time.Hour,
-	"24h": 24 * time.Hour,
-	"7d":  7 * 24 * time.Hour,
-	"30d": 30 * 24 * time.Hour,
-}
+// Response headers set on a successful upload creation (POST /files/).
+const (
+	HeaderManagementToken = "Upload-Management-Token"
+	HeaderManageURL       = "Upload-Manage-URL"
+)
 
 type Hooks struct {
-	cfg      *config.Config
-	s3Client *s3.Client
+	cfg   *config.Config
+	files *files.Service
 }
 
-func New(cfg *config.Config, s3Client *s3.Client) *Hooks {
-	return &Hooks{cfg: cfg, s3Client: s3Client}
+func New(cfg *config.Config, fs *files.Service) *Hooks {
+	return &Hooks{cfg: cfg, files: fs}
 }
 
-// PreCreate validates the expires-in metadata and injects a default if absent.
+// PreCreate validates upload metadata before tusd creates the upload. It
+// applies defaults, hashes an optional password, and issues the management
+// token, which is returned once in the Upload-Management-Token header.
 func (h *Hooks) PreCreate(event handler.HookEvent) (handler.HTTPResponse, handler.FileInfoChanges, error) {
-	expiry := event.Upload.MetaData["expires-in"]
+	meta := make(handler.MetaData, len(event.Upload.MetaData)+2)
+	for k, v := range event.Upload.MetaData {
+		meta[k] = v
+	}
+	files.StripServerOwned(meta)
 
-	if expiry == "" {
-		expiry = "24h"
-		// Inject the default back so PostFinish can read it.
-		changes := handler.FileInfoChanges{
-			MetaData: event.Upload.MetaData,
-		}
-		if changes.MetaData == nil {
-			changes.MetaData = make(handler.MetaData)
-		}
-		changes.MetaData["expires-in"] = expiry
-		return handler.HTTPResponse{}, changes, nil
+	if meta[files.MetaExpiresIn] == "" {
+		meta[files.MetaExpiresIn] = files.DefaultExpiry
+	}
+	if _, err := files.ParseExpiry(meta[files.MetaExpiresIn]); err != nil {
+		return reject("ERR_INVALID_EXPIRES_IN", err.Error())
 	}
 
-	if _, ok := validExpiries[expiry]; !ok {
-		body, _ := json.Marshal(map[string]string{
-			"error": fmt.Sprintf("invalid expires-in %q; valid values: 1h, 6h, 24h, 7d, 30d", expiry),
-		})
-		return handler.HTTPResponse{
-			StatusCode: 400,
-			Header:     handler.HTTPHeader{"Content-Type": "application/json"},
-			Body:       string(body),
-		}, handler.FileInfoChanges{}, nil
+	if !files.ValidDisposition(meta[files.MetaDisposition]) {
+		return reject("ERR_INVALID_DISPOSITION", `invalid disposition; valid values: inline, attachment`)
 	}
 
-	return handler.HTTPResponse{}, handler.FileInfoChanges{}, nil
+	if pw, ok := meta[files.MetaPassword]; ok {
+		delete(meta, files.MetaPassword)
+		if pw != "" {
+			hash, err := files.HashPassword(pw)
+			if err != nil {
+				return reject("ERR_INVALID_PASSWORD", err.Error())
+			}
+			meta[files.MetaPasswordHash] = hash
+		}
+	}
+
+	token, err := files.NewToken()
+	if err != nil {
+		return handler.HTTPResponse{}, handler.FileInfoChanges{}, err
+	}
+	objectID, err := files.NewObjectID()
+	if err != nil {
+		return handler.HTTPResponse{}, handler.FileInfoChanges{}, err
+	}
+	meta[files.MetaTokenHash] = files.HashToken(token)
+
+	resp := handler.HTTPResponse{
+		Header: handler.HTTPHeader{
+			HeaderManagementToken: token,
+			HeaderManageURL:       h.files.ManageURL(objectID, token),
+		},
+	}
+	return resp, handler.FileInfoChanges{ID: objectID, MetaData: meta}, nil
+}
+
+func reject(code, msg string) (handler.HTTPResponse, handler.FileInfoChanges, error) {
+	return handler.HTTPResponse{}, handler.FileInfoChanges{}, handler.NewError(code, msg, http.StatusBadRequest)
 }
 
 // HandleComplete tags the S3 object with its expiry time after a successful upload.
@@ -70,15 +92,10 @@ func (h *Hooks) HandleComplete(event handler.HookEvent) {
 		return
 	}
 
-	expiry := event.Upload.MetaData["expires-in"]
-	if expiry == "" {
-		expiry = "24h"
-	}
-
-	dur, ok := validExpiries[expiry]
-	if !ok {
-		slog.Error("hooks: invalid expires-in in metadata", "value", expiry, "upload_id", event.Upload.ID)
-		return
+	dur, err := files.ParseExpiry(event.Upload.MetaData[files.MetaExpiresIn])
+	if err != nil {
+		slog.Error("hooks: invalid expires-in in metadata", "error", err, "upload_id", event.Upload.ID)
+		dur, _ = files.ParseExpiry(files.DefaultExpiry)
 	}
 
 	expiresAt := time.Now().UTC().Add(dur).Format(time.RFC3339)
@@ -93,7 +110,7 @@ func (h *Hooks) HandleComplete(event handler.HookEvent) {
 	}
 
 	for _, k := range []string{key, key + ".info"} {
-		_, err := h.s3Client.PutObjectTagging(ctx, &s3.PutObjectTaggingInput{
+		_, err := h.files.S3().PutObjectTagging(ctx, &s3.PutObjectTaggingInput{
 			Bucket:  aws.String(h.cfg.S3Bucket),
 			Key:     aws.String(k),
 			Tagging: tags,

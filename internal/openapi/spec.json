@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "share.mk",
-    "description": "Anonymous resumable file upload service backed by Scaleway S3.",
+    "description": "Anonymous resumable file upload service backed by S3. Uploads use the tus protocol; each upload returns a management token for deleting it.",
     "version": "1.0.0"
   },
   "servers": [
@@ -24,7 +24,10 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "status": { "type": "string", "example": "ok" }
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    }
                   }
                 }
               }
@@ -36,32 +39,46 @@
     "/files/": {
       "post": {
         "summary": "Create upload",
-        "description": "Initiate a new resumable upload. Pass `Upload-Metadata` header with base64-encoded key=value pairs. Supported metadata keys: `filename`, `content-type`, `expires-in` (one of 1h, 6h, 24h, 7d, 30d; defaults to 24h).",
+        "description": "Initiate a new resumable upload. Pass the `Upload-Metadata` header with comma-separated `key base64(value)` pairs. Supported keys:\n\n- `filename` \u2014 original filename\n- `filetype` \u2014 MIME type\n- `expires-in` \u2014 one of 1h, 6h, 24h, 7d, 30d (default 24h)\n- `disposition` \u2014 `inline` (default: images, video, audio, PDF and text open in the browser) or `attachment` (always download)\n- `password` \u2014 optional; required to download the file. Only a hash is stored.\n\nThe response carries a management token that is shown only once. Keep it to delete the file later.",
         "operationId": "createUpload",
         "parameters": [
           {
             "name": "Tus-Resumable",
             "in": "header",
             "required": true,
-            "schema": { "type": "string", "enum": ["1.0.0"] }
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1.0.0"
+              ]
+            }
           },
           {
             "name": "Upload-Length",
             "in": "header",
             "description": "Total upload size in bytes",
-            "schema": { "type": "integer" }
+            "schema": {
+              "type": "integer"
+            }
           },
           {
             "name": "Upload-Defer-Length",
             "in": "header",
             "description": "Set to 1 to defer the upload length",
-            "schema": { "type": "integer", "enum": [1] }
+            "schema": {
+              "type": "integer",
+              "enum": [
+                1
+              ]
+            }
           },
           {
             "name": "Upload-Metadata",
             "in": "header",
             "description": "Comma-separated list of base64-encoded metadata pairs",
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -70,13 +87,33 @@
             "headers": {
               "Location": {
                 "description": "URL of the created upload",
-                "schema": { "type": "string" }
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Upload-Management-Token": {
+                "description": "Secret token for the management API and DELETE. Returned only once.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Upload-Manage-URL": {
+                "description": "Web page for viewing and deleting the upload; the token is in the URL fragment.",
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
-          "400": { "description": "Invalid metadata (e.g. bad expires-in value)" },
-          "413": { "description": "Upload size exceeds server limit" },
-          "429": { "description": "Rate limit exceeded" }
+          "400": {
+            "description": "Invalid metadata (bad expires-in, disposition or password)"
+          },
+          "413": {
+            "description": "Upload size exceeds server limit"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          }
         }
       }
     },
@@ -86,111 +123,336 @@
         "operationId": "getUploadStatus",
         "parameters": [
           {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": { "type": "string" }
+            "$ref": "#/components/parameters/id"
           },
           {
             "name": "Tus-Resumable",
             "in": "header",
             "required": true,
-            "schema": { "type": "string", "enum": ["1.0.0"] }
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1.0.0"
+              ]
+            }
           }
         ],
         "responses": {
           "200": {
             "description": "Upload info",
             "headers": {
-              "Upload-Offset": { "schema": { "type": "integer" } },
-              "Upload-Length": { "schema": { "type": "integer" } }
+              "Upload-Offset": {
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "Upload-Length": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
             }
           },
-          "404": { "description": "Upload not found" }
-        }
+          "404": {
+            "description": "Upload not found"
+          }
+        },
+        "description": "tus upload status. Secret metadata (password hash, token hash) is never included in `Upload-Metadata`."
       },
       "patch": {
         "summary": "Upload chunk",
         "operationId": "uploadChunk",
         "parameters": [
           {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": { "type": "string" }
+            "$ref": "#/components/parameters/id"
           },
           {
             "name": "Tus-Resumable",
             "in": "header",
             "required": true,
-            "schema": { "type": "string", "enum": ["1.0.0"] }
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1.0.0"
+              ]
+            }
           },
           {
             "name": "Upload-Offset",
             "in": "header",
             "required": true,
-            "schema": { "type": "integer" }
+            "schema": {
+              "type": "integer"
+            }
           },
           {
             "name": "Content-Type",
             "in": "header",
             "required": true,
-            "schema": { "type": "string", "enum": ["application/offset+octet-stream"] }
+            "schema": {
+              "type": "string",
+              "enum": [
+                "application/offset+octet-stream"
+              ]
+            }
           }
         ],
         "requestBody": {
           "required": true,
           "content": {
             "application/offset+octet-stream": {
-              "schema": { "type": "string", "format": "binary" }
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
             }
           }
         },
         "responses": {
-          "204": { "description": "Chunk accepted" },
-          "409": { "description": "Offset mismatch" },
-          "429": { "description": "Rate limit exceeded" }
+          "204": {
+            "description": "Chunk accepted"
+          },
+          "409": {
+            "description": "Offset mismatch"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          }
         }
       },
       "get": {
         "summary": "Download file",
         "operationId": "downloadFile",
+        "description": "Streams the file. Supports `Range` requests (video seeking). Images, video, audio, PDF and plain text are served inline unless the upload set `disposition: attachment`; HTML, SVG source and code are shown as plain text; other types download. Add `?dl=1` to force a download.\n\nPassword-protected files need HTTP Basic auth (any username). Browsers get a password form instead.",
+        "security": [
+          {},
+          {
+            "filePassword": []
+          }
+        ],
         "parameters": [
           {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": { "type": "string" }
+            "$ref": "#/components/parameters/id"
+          },
+          {
+            "name": "dl",
+            "in": "query",
+            "description": "Set to 1 to force `Content-Disposition: attachment`",
+            "schema": {
+              "type": "integer",
+              "enum": [
+                1
+              ]
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "example": "bytes=0-1023"
           }
         ],
         "responses": {
           "200": {
             "description": "File content",
-            "content": { "*/*": { "schema": { "type": "string", "format": "binary" } } }
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
           },
-          "404": { "description": "File not found or expired" }
+          "206": {
+            "description": "Partial content (Range request)"
+          },
+          "401": {
+            "description": "Password required or wrong password"
+          },
+          "404": {
+            "description": "File not found or expired"
+          },
+          "409": {
+            "description": "Upload not complete yet"
+          },
+          "416": {
+            "description": "Range not satisfiable"
+          }
         }
       },
       "delete": {
-        "summary": "Delete upload",
+        "summary": "Delete file",
         "operationId": "deleteUpload",
+        "description": "Permanently deletes the upload (also aborts it if still in progress). Requires the management token as `Authorization: Bearer <token>` or in the `Upload-Management-Token` header.",
+        "security": [
+          {
+            "managementToken": []
+          }
+        ],
         "parameters": [
           {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": { "type": "string" }
-          },
-          {
-            "name": "Tus-Resumable",
-            "in": "header",
-            "required": true,
-            "schema": { "type": "string", "enum": ["1.0.0"] }
+            "$ref": "#/components/parameters/id"
           }
         ],
         "responses": {
-          "204": { "description": "Upload deleted" },
-          "404": { "description": "Upload not found" }
+          "204": {
+            "description": "File deleted"
+          },
+          "401": {
+            "description": "Management token missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown file or wrong token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Unlock password-protected file (browser form)",
+        "operationId": "unlockFile",
+        "description": "Submits the password form. On success sets an unlock cookie and redirects (303) to the file. API clients should use Basic auth on GET instead.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string"
+                  },
+                  "dl": {
+                    "type": "string",
+                    "enum": [
+                      "1"
+                    ]
+                  }
+                },
+                "required": [
+                  "password"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "303": {
+            "description": "Unlocked; redirects to the file"
+          },
+          "401": {
+            "description": "Wrong password"
+          },
+          "404": {
+            "description": "File not found"
+          }
+        }
+      }
+    },
+    "/api/files/{id}": {
+      "get": {
+        "summary": "Get file info",
+        "operationId": "getFileInfo",
+        "security": [
+          {
+            "managementToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Management token missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown file or wrong token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete file",
+        "operationId": "deleteFile",
+        "security": [
+          {
+            "managementToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/id"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "File deleted"
+          },
+          "401": {
+            "description": "Management token missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown file or wrong token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -203,12 +465,89 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "type": "object" }
+              "schema": {
+                "type": "object"
+              }
             }
           }
         },
         "responses": {
-          "200": { "description": "MCP response" }
+          "200": {
+            "description": "MCP response"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "managementToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The management token returned in the `Upload-Management-Token` header when the upload was created (or by the MCP `upload_file` tool)."
+      },
+      "filePassword": {
+        "type": "http",
+        "scheme": "basic",
+        "description": "For password-protected files: send the password as the Basic auth password (username is ignored), e.g. `curl -u :secret`."
+      }
+    },
+    "parameters": {
+      "id": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Upload ID from the `Location` header. The part before `+` alone also works for GET, DELETE and the management API.",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "schemas": {
+      "FileInfo": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer"
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "download_url": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Empty until the upload completes"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "inline",
+              "attachment"
+            ]
+          },
+          "password_protected": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
         }
       }
     }

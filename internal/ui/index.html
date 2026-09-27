@@ -249,6 +249,49 @@
     .copy-btn:hover { background: var(--border); }
     .copy-btn.copied { color: var(--success); border-color: var(--success); }
 
+    /* Password input */
+    .input {
+      width: 100%;
+      padding: 0.45rem 0.7rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font: inherit;
+      font-size: 0.875rem;
+      background: var(--card);
+      color: var(--text);
+      margin-bottom: 1.25rem;
+    }
+    .input:focus { outline: none; border-color: var(--primary); }
+
+    /* Manage link */
+    .url-label {
+      font-size: 0.6875rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-top: 0.625rem;
+    }
+    .warn {
+      font-size: 0.75rem;
+      color: #92400e;
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-radius: 0.375rem;
+      padding: 0.375rem 0.5rem;
+      margin-top: 0.375rem;
+    }
+    .badge {
+      display: inline-block;
+      font-size: 0.6875rem;
+      font-weight: 500;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 9999px;
+      padding: 0 0.45rem;
+      margin-left: 0.375rem;
+    }
+
     .text-success { color: var(--success); }
     .text-error   { color: var(--error); }
   </style>
@@ -262,13 +305,22 @@
 
     <div class="card">
       <p class="section-label">Expires in</p>
-      <div class="pills">
+      <div class="pills" data-group="expires">
         <button class="pill" data-value="1h">1h</button>
         <button class="pill" data-value="6h">6h</button>
         <button class="pill active" data-value="24h">24h</button>
         <button class="pill" data-value="7d">7d</button>
         <button class="pill" data-value="30d">30d</button>
       </div>
+
+      <p class="section-label">Links open as</p>
+      <div class="pills" data-group="disposition">
+        <button class="pill active" data-value="inline" title="Images, video, audio, PDF and text open in the browser">Preview in browser</button>
+        <button class="pill" data-value="attachment" title="Always download the file">Force download</button>
+      </div>
+
+      <p class="section-label">Password <span style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></p>
+      <input class="input" id="password" type="password" autocomplete="new-password" placeholder="Leave empty for a public link" />
 
       <div class="dropzone" id="dropzone">
         <input type="file" id="file-input" multiple />
@@ -294,14 +346,16 @@
   </div>
 
   <script>
-    let expiresIn = '24h'
+    const options = { expires: '24h', disposition: 'inline' }
 
-    // Expiry pills
-    document.querySelectorAll('.pill').forEach(pill => {
-      pill.addEventListener('click', () => {
-        document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'))
-        pill.classList.add('active')
-        expiresIn = pill.dataset.value
+    // Option pills (one active per group)
+    document.querySelectorAll('.pills').forEach(group => {
+      group.querySelectorAll('.pill').forEach(pill => {
+        pill.addEventListener('click', () => {
+          group.querySelectorAll('.pill').forEach(p => p.classList.remove('active'))
+          pill.classList.add('active')
+          options[group.dataset.group] = pill.dataset.value
+        })
       })
     })
 
@@ -347,14 +401,27 @@
       `
       document.getElementById('file-list').prepend(el)
 
+      const password = document.getElementById('password').value
+      const metadata = {
+        filename: file.name,
+        filetype: file.type || 'application/octet-stream',
+        'expires-in': options.expires,
+        disposition: options.disposition,
+      }
+      if (password) metadata.password = password
+      let manageURL = ''
+
       const tusUpload = new tus.Upload(file, {
         endpoint: '/files/',
         chunkSize: 5 * 1024 * 1024,
         retryDelays: [0, 1000, 3000],
-        metadata: {
-          filename: file.name,
-          filetype: file.type || 'application/octet-stream',
-          'expires-in': expiresIn,
+        metadata,
+        // The management token is only returned when the upload is created,
+        // so never resume a previous upload from browser storage.
+        storeFingerprintForResuming: false,
+        onAfterResponse(req, res) {
+          const v = res.getHeader('Upload-Manage-URL')
+          if (v) manageURL = v
         },
         onProgress(sent, total) {
           const pct = total ? Math.round(sent / total * 100) : 0
@@ -363,13 +430,27 @@
         },
         onSuccess() {
           document.getElementById('pt-' + id).style.display = 'none'
-          document.getElementById('st-' + id).innerHTML =
+          let html =
             `<span class="text-success">✓ Uploaded</span>` +
+            (password ? `<span class="badge">password protected</span>` : '') +
             `<div class="url-row">` +
               `<span class="url-text" title="${esc(tusUpload.url)}">${esc(tusUpload.url)}</span>` +
               `<button class="copy-btn" id="cp-${id}">Copy</button>` +
             `</div>`
-          document.getElementById('cp-' + id).addEventListener('click', () => copyURL(tusUpload.url, id))
+          if (manageURL) {
+            html +=
+              `<p class="url-label">Delete link</p>` +
+              `<div class="url-row">` +
+                `<span class="url-text" title="${esc(manageURL)}">${esc(manageURL)}</span>` +
+                `<button class="copy-btn" id="cpm-${id}">Copy</button>` +
+              `</div>` +
+              `<p class="warn">Keep this link private and save it somewhere. It's the only way to delete the file before it expires, and it can't be recovered.</p>`
+          }
+          document.getElementById('st-' + id).innerHTML = html
+          document.getElementById('cp-' + id).addEventListener('click', () => copyURL(tusUpload.url, 'cp-' + id))
+          if (manageURL) {
+            document.getElementById('cpm-' + id).addEventListener('click', () => copyURL(manageURL, 'cpm-' + id))
+          }
         },
         onError(err) {
           document.getElementById('pt-' + id).style.display = 'none'
@@ -380,9 +461,9 @@
       tusUpload.start()
     }
 
-    function copyURL(url, id) {
+    function copyURL(url, btnId) {
       navigator.clipboard.writeText(url).then(() => {
-        const btn = document.getElementById('cp-' + id)
+        const btn = document.getElementById(btnId)
         btn.textContent = 'Copied!'
         btn.classList.add('copied')
         setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied') }, 2000)

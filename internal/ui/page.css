@@ -1,0 +1,39 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #fafafa; --card: #ffffff; --border: #e4e4e7; --text: #09090b; --muted: #71717a;
+  --subtle: #f4f4f5; --primary: #18181b; --primary-fg: #fafafa; --success: #16a34a;
+  --error: #dc2626; --radius: 0.5rem; --radius-lg: 0.75rem;
+}
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg); color: var(--text); min-height: 100vh;
+  display: flex; align-items: center; justify-content: center; padding: 2rem 1rem;
+}
+.container { width: 100%; max-width: 420px; }
+h1 { font-size: 1.375rem; font-weight: 700; letter-spacing: -0.03em; margin-bottom: 1.25rem; }
+h1 a { color: inherit; text-decoration: none; }
+.card {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 1.5rem; box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 1px 8px rgba(0,0,0,0.03);
+}
+.title { font-size: 0.9375rem; font-weight: 600; margin-bottom: 0.25rem; overflow-wrap: anywhere; }
+.muted { font-size: 0.8125rem; color: var(--muted); }
+.input {
+  width: 100%; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius);
+  font: inherit; font-size: 0.875rem; margin: 1rem 0 0.75rem;
+}
+.input:focus { outline: none; border-color: var(--primary); }
+.btn {
+  width: 100%; padding: 0.55rem; border: 1px solid var(--primary); border-radius: var(--radius);
+  background: var(--primary); color: var(--primary-fg); font: inherit; font-size: 0.875rem;
+  font-weight: 500; cursor: pointer;
+}
+.btn:disabled { opacity: 0.6; cursor: default; }
+.btn.danger { background: var(--error); border-color: var(--error); }
+.btn.secondary { background: none; color: var(--text); border-color: var(--border); margin-top: 0.5rem; }
+.error { color: var(--error); font-size: 0.8125rem; margin-top: 0.5rem; }
+.success { color: var(--success); font-size: 0.875rem; }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 0.35rem 1rem; font-size: 0.8125rem; margin: 1rem 0 1.25rem; }
+dt { color: var(--muted); }
+dd { overflow-wrap: anywhere; }
+dd a { color: var(--text); }

@@ -17,11 +17,15 @@ Parameters:
 - content (required): base64-encoded file content (standard or URL-safe encoding)
 - content_type (optional): MIME type — defaults to application/octet-stream
 - expires_in (optional): 1h | 6h | 24h | 7d | 30d — defaults to 24h
+- disposition (optional): "inline" (default) — images, video, audio, PDF and text open in the browser;
+  "attachment" — the link always downloads
+- password (optional): password required to download the file
 
-Returns: { "file_id", "management_token", "download_url", "expires_at", "filename", "size_bytes" }
+Returns: { "file_id", "management_token", "manage_url", "download_url", "expires_at", "filename", "size_bytes", "password_protected" }
 
-IMPORTANT: Save the management_token — it is only returned once and is required to call
-get_file_info or delete_file. Downloads via the download_url are public and need no token.
+IMPORTANT: Save the management_token (or manage_url) — it is only returned once and is required to call
+get_file_info or delete_file. Downloads via the download_url need no token; if a password was set,
+share it separately from the link.
 
 ---
 
@@ -33,7 +37,7 @@ Parameters:
 - file_id (required): the ID returned by upload_file
 - management_token (required): the token returned by upload_file
 
-Returns: { "file_id", "filename", "content_type", "size_bytes", "download_url", "expires_at" }
+Returns: { "file_id", "filename", "content_type", "size_bytes", "complete", "download_url", "expires_at", "disposition", "password_protected" }
 
 ---
 
@@ -63,6 +67,11 @@ Values are base64-encoded key=value pairs, comma-separated:
 - filename — original filename
 - filetype — MIME type
 - expires-in — one of: 1h, 6h, 24h, 7d, 30d (defaults to 24h)
+- disposition — inline (default) or attachment
+- password — optional download password
+
+The 201 response includes an `Upload-Management-Token` header (shown once) and an
+`Upload-Manage-URL` header (web page to delete the file). Keep them.
 
 ### Example (curl)
 
@@ -81,9 +90,23 @@ curl -X PATCH https://share.mk/files/{id} \
   -H "Content-Type: application/offset+octet-stream" \
   --data-binary @report.pdf
 
-# 3. Download
+# 3. Download (add ?dl=1 to force a download; -u :password for protected files)
 curl https://share.mk/files/{id} -o report.pdf
+
+# 4. Delete early (token from the Upload-Management-Token header)
+curl -X DELETE https://share.mk/api/files/{id} -H "Authorization: Bearer {token}"
 ```
+
+### Viewing in the browser
+
+Images, video (with seeking), audio, PDF and plain text open directly in the browser.
+HTML, SVG source and code are shown as plain text. Anything else downloads.
+Append ?dl=1 to any link to force a download.
+
+### Management API
+
+- GET /api/files/{id} — file info (Authorization: Bearer {token})
+- DELETE /api/files/{id} — delete the file (Authorization: Bearer {token})
 
 ## Limits
 

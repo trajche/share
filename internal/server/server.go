@@ -1,13 +1,13 @@
 package server
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/tus/tusd/v2/pkg/handler"
 	"sharemk/internal/config"
+	"sharemk/internal/files"
 	"sharemk/internal/openapi"
 	"sharemk/internal/ratelimit"
 	"sharemk/internal/ui"
@@ -15,13 +15,19 @@ import (
 
 type Server struct {
 	cfg     *config.Config
+	files   *files.Service
+	tus     http.Handler
 	handler http.Handler
 }
 
-func New(cfg *config.Config, tusHandler *handler.Handler, limiter *ratelimit.Limiter, mcpHandler http.Handler, openapiHandler http.Handler) *Server {
+func New(cfg *config.Config, fs *files.Service, tusHandler *handler.Handler, limiter *ratelimit.Limiter, mcpHandler http.Handler, openapiHandler http.Handler) *Server {
+	s := &Server{cfg: cfg, files: fs}
+
 	mux := http.NewServeMux()
 
 	mux.Handle("GET /{$}", ui.Handler())
+	mux.Handle("GET /manage/{id}", ui.ManageHandler())
+	mux.Handle("GET /ui/page.css", ui.CSSHandler())
 
 	mux.HandleFunc("GET /health", healthHandler)
 
@@ -33,14 +39,19 @@ func New(cfg *config.Config, tusHandler *handler.Handler, limiter *ratelimit.Lim
 	// MCP Streamable HTTP transport (handles GET and POST).
 	mux.Handle("/mcp", mcpHandler)
 
+	// Management API (authenticated with the management token).
+	mux.HandleFunc("GET /api/files/{id}", s.handleInfo)
+	mux.HandleFunc("DELETE /api/files/{id}", s.handleDelete)
+
 	// tusd's internal router does strings.Trim(path, "/") to detect the
 	// creation endpoint (empty string = POST create). We must strip the base
 	// path prefix before handing off so tusd sees "/" not "/files/".
 	tusPrefix := strings.TrimSuffix(cfg.TUSBasePath, "/") // "/files/" → "/files"
-	strippedTus := http.StripPrefix(tusPrefix, tusHandler)
-	mux.Handle("/files/", limiter.Middleware(inlineDisposition(strippedTus)))
+	s.tus = http.StripPrefix(tusPrefix, tusHandler)
+	mux.Handle(cfg.TUSBasePath, limiter.Middleware(http.HandlerFunc(s.handleFiles)))
 
-	return &Server{cfg: cfg, handler: mux}
+	s.handler = mux
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
@@ -52,86 +63,68 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-// inlineDisposition wraps a handler and rewrites Content-Disposition from
-// "attachment" to "inline" on GET responses so that AI tools and browsers
-// render the file content directly instead of treating it as a binary download.
-// Pass ?dl=1 to force attachment (download) behaviour instead.
-func inlineDisposition(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			next.ServeHTTP(w, r)
-			return
-		}
-		dl := r.URL.Query().Get("dl") == "1"
-		next.ServeHTTP(&inlineWriter{ResponseWriter: w, forceDownload: dl}, r)
-	})
+// handleFiles routes requests under the tus base path. Downloads, deletion
+// and password unlocking are handled here; everything else is tus.
+func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, s.cfg.TUSBasePath)
+	if id == "" || strings.Contains(id, "/") {
+		s.tus.ServeHTTP(w, r)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleDownload(w, r, id)
+	case http.MethodPost:
+		// tus only POSTs to the base path, so a POST to an upload URL is
+		// the password form.
+		s.handleUnlock(w, r, id)
+	case http.MethodDelete:
+		s.handleDelete(w, r)
+	case http.MethodHead:
+		s.tus.ServeHTTP(&metadataFilter{ResponseWriter: w}, r)
+	default:
+		s.tus.ServeHTTP(w, r)
+	}
 }
 
-// inlineWriter intercepts WriteHeader to rewrite Content-Disposition and
-// Content-Type before the response is sent. Go's http.ResponseWriter does not
-// allow header changes after WriteHeader, so we must intercept it.
-type inlineWriter struct {
+// metadataFilter removes secret values from the Upload-Metadata header that
+// tusd sends in HEAD responses.
+type metadataFilter struct {
 	http.ResponseWriter
-	forceDownload bool
-	wroteHeader   bool
+	wroteHeader bool
 }
 
-func (w *inlineWriter) WriteHeader(code int) {
+func (w *metadataFilter) WriteHeader(code int) {
 	if !w.wroteHeader {
 		w.wroteHeader = true
-		h := w.ResponseWriter.Header()
-
-		if w.forceDownload {
-			// Ensure attachment regardless of what tusd set.
-			cd := h.Get("Content-Disposition")
-			if strings.HasPrefix(cd, "inline") {
-				h.Set("Content-Disposition", "attachment"+strings.TrimPrefix(cd, "inline"))
-			} else if cd == "" {
-				h.Set("Content-Disposition", "attachment")
-			}
-		} else {
-			// Rewrite attachment → inline so browsers and AI tools render inline.
-			cd := h.Get("Content-Disposition")
-			if strings.HasPrefix(cd, "attachment") {
-				h.Set("Content-Disposition", "inline"+strings.TrimPrefix(cd, "attachment"))
-			}
-
-			// Fix Content-Type when tusd falls back to binary/octet-stream.
-			// Uploaders often send the MIME type as "content-type" metadata key
-			// instead of the tusd-preferred "filetype" key.
-			ct := h.Get("Content-Type")
-			if ct == "application/octet-stream" || ct == "binary/octet-stream" {
-				meta := parseTusdMeta(h.Get("Upload-Metadata"))
-				if mime, ok := meta["filetype"]; ok && mime != "" {
-					h.Set("Content-Type", mime)
-				} else if mime, ok := meta["content-type"]; ok && mime != "" {
-					h.Set("Content-Type", mime)
-				}
-			}
+		h := w.Header()
+		if raw := h.Get("Upload-Metadata"); raw != "" {
+			public := files.PublicMetadata(handler.ParseMetadataHeader(raw))
+			h.Set("Upload-Metadata", handler.SerializeMetadataHeader(public))
 		}
 	}
 	w.ResponseWriter.WriteHeader(code)
 }
 
-func (w *inlineWriter) Write(b []byte) (int, error) {
+func (w *metadataFilter) Write(b []byte) (int, error) {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
 	}
 	return w.ResponseWriter.Write(b)
 }
 
-// parseTusdMeta decodes the Upload-Metadata header value (comma-separated
-// "key base64value" pairs) into a plain map.
-func parseTusdMeta(raw string) map[string]string {
-	m := make(map[string]string)
-	for _, pair := range strings.Split(raw, ",") {
-		pair = strings.TrimSpace(pair)
-		kv := strings.SplitN(pair, " ", 2)
-		if len(kv) == 2 {
-			if b, err := base64.StdEncoding.DecodeString(kv[1]); err == nil {
-				m[kv[0]] = string(b)
-			}
-		}
-	}
-	return m
+func (w *metadataFilter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v) //nolint:errcheck
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
 }

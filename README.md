@@ -14,7 +14,7 @@ Connect to `https://share.mk/mcp` and use the built-in tools:
 
 | Tool | What it does |
 |---|---|
-| `upload_file` | Upload base64-encoded file → returns `download_url` + `management_token` |
+| `upload_file` | Upload base64-encoded file → returns `download_url` + `management_token`. Optional `password`, `disposition` |
 | `get_file_info` | Fetch metadata (requires `management_token`) |
 | `delete_file` | Delete file (requires `management_token`) |
 
@@ -37,11 +37,37 @@ curl -X PATCH "https://share.mk/files/{id}" \
   -H "Content-Type: application/offset+octet-stream" \
   --data-binary @report.pdf
 
+# → Upload-Management-Token: {token}   (shown once — keep it)
+# → Upload-Manage-URL: https://share.mk/manage/{objectId}#{token}
+
 # 3. Download
 curl https://share.mk/files/{id} -o report.pdf
+
+# 4. Delete before expiry
+curl -X DELETE https://share.mk/api/files/{id} -H "Authorization: Bearer {token}"
 ```
 
-`expires-in` options: `1h`, `6h`, `24h` (default), `7d`, `30d`.
+Upload metadata keys (values base64-encoded):
+
+| Key | Values |
+|---|---|
+| `filename` | original filename |
+| `filetype` | MIME type |
+| `expires-in` | `1h`, `6h`, `24h` (default), `7d`, `30d` |
+| `disposition` | `inline` (default) or `attachment` |
+| `password` | optional; required to download (only a hash is stored) |
+
+### Preview vs. download
+
+Links open in the browser for images, video (with seeking), audio, PDF and plain text.
+HTML, SVG source and code are shown as plain text, never executed. Everything else downloads.
+`disposition: attachment` at upload, or `?dl=1` on any link, forces a download.
+All downloads are sent with a sandboxing `Content-Security-Policy` and `nosniff`.
+
+### Password-protected files
+
+Browsers get a password form; after unlocking, a cookie scoped to that file keeps it open for 12h.
+API clients send the password with HTTP Basic auth: `curl -u :secret https://share.mk/files/{id}`.
 
 Interactive API docs: [share.mk/docs](https://share.mk/docs)
 

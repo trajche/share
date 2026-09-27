@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex" />
+  <title>Password required — Share.mk</title>
+  <style>{{.CSS}}</style>
+</head>
+<body>
+  <div class="container">
+    <h1><a href="/">Share.mk</a></h1>
+    <form class="card" method="post" action="{{.Action}}">
+      <p class="title">This file is password protected</p>
+      <p class="muted">Enter the password you were given to open it.</p>
+      <input class="input" type="password" name="password" autocomplete="current-password" placeholder="Password" required autofocus />
+      {{if .Download}}<input type="hidden" name="dl" value="1" />{{end}}
+      <button class="btn" type="submit">Unlock</button>
+      {{with .Error}}<p class="error">{{.}}</p>{{end}}
+    </form>
+  </div>
+</body>
+</html>

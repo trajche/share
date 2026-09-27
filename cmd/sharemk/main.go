@@ -9,17 +9,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tus/tusd/v2/pkg/handler"
-	"github.com/tus/tusd/v2/pkg/memorylocker"
-	"github.com/tus/tusd/v2/pkg/s3store"
+	"sharemk/internal/app"
 	"sharemk/internal/config"
 	"sharemk/internal/expiry"
-	"sharemk/internal/hooks"
-	"sharemk/internal/mcpserver"
-	"sharemk/internal/openapi"
-	"sharemk/internal/ratelimit"
 	"sharemk/internal/s3client"
-	"sharemk/internal/server"
 )
 
 // version is set at build time via -ldflags "-X main.version=v1.2.3".
@@ -39,71 +32,31 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 3. Configure S3 store.
-	store := s3store.New(cfg.S3Bucket, s3Client)
-	store.ObjectPrefix = cfg.S3ObjectPrefix
-
-	composer := handler.NewStoreComposer()
-	store.UseIn(composer)
-
-	// 4. Configure memory locker.
-	locker := memorylocker.New()
-	locker.UseIn(composer)
-
-	// 5. Set up hooks.
-	hooksHandler := hooks.New(cfg, s3Client)
-
-	// 6. Create tusd handler.
-	tusHandler, err := handler.NewHandler(handler.Config{
-		BasePath:                cfg.TUSBasePath,
-		StoreComposer:           composer,
-		MaxSize:                 cfg.TUSMaxSize,
-		RespectForwardedHeaders: true,
-		NotifyCompleteUploads:   true,
-		PreUploadCreateCallback: hooksHandler.PreCreate,
-	})
+	// 3. Assemble tusd, hooks, downloads, management API and MCP.
+	application, err := app.New(cfg, s3Client)
 	if err != nil {
-		slog.Error("failed to create tusd handler", "error", err)
+		slog.Error("failed to build application", "error", err)
 		os.Exit(1)
 	}
 
-	// 7. Drain CompleteUploads channel; call HandleComplete for each finished upload.
+	// 4. Tag finished uploads with their expiry.
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		for {
-			select {
-			case event, ok := <-tusHandler.CompleteUploads:
-				if !ok {
-					return
-				}
-				go hooksHandler.HandleComplete(event)
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+	go application.ProcessCompletions(ctx)
 
-	// 8. Start background expiry worker.
+	// 5. Start background expiry worker.
 	expiryWorker := expiry.New(cfg, s3Client)
 	go expiryWorker.Start(ctx)
 
-	// 9. Build MCP server and OpenAPI handler.
-	mcpSrv := mcpserver.New(cfg, s3Client)
-	openapiHandler := openapi.Handler()
-
-	// 10. Build rate limiter and HTTP server.
-	limiter := ratelimit.New(cfg.RateLimitGlobal, cfg.RateLimitPerIP)
-	srv := server.New(cfg, tusHandler, limiter, mcpSrv.Handler(), openapiHandler)
-
+	// 6. HTTP server.
 	httpServer := &http.Server{
-		Addr:        cfg.ServerAddr,
-		Handler:     srv.Handler(),
-		ReadTimeout: 0, // no read timeout — large uploads need unlimited time
+		Addr:         cfg.ServerAddr,
+		Handler:      application.Handler,
+		ReadTimeout:  0, // no read timeout — large uploads need unlimited time
 		WriteTimeout: 0,
-		IdleTimeout: 120 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
-	// 11. Graceful shutdown on SIGTERM / SIGINT.
+	// 7. Graceful shutdown on SIGTERM / SIGINT.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex" />
+  <meta name="referrer" content="no-referrer" />
+  <title>Manage file — Share.mk</title>
+  <link rel="stylesheet" href="/ui/page.css" />
+</head>
+<body>
+  <div class="container">
+    <h1><a href="/">Share.mk</a></h1>
+    <div class="card" id="card">
+      <p class="muted">Loading…</p>
+    </div>
+  </div>
+  <script>
+    const id = decodeURIComponent(location.pathname.split('/').pop())
+    const card = document.getElementById('card')
+
+    function esc(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+    }
+    function fmt(bytes) {
+      if (!bytes) return '0 B'
+      const u = ['B','KB','MB','GB','TB'], i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), 4)
+      return (bytes / 1024 ** i).toFixed(i ? 1 : 0) + ' ' + u[i]
+    }
+
+    function askToken(msg) {
+      card.innerHTML =
+        `<p class="title">Manage file</p>` +
+        `<p class="muted">Paste the management token you received when uploading.</p>` +
+        `<form id="tf"><input class="input" id="tk" placeholder="Management token" autocomplete="off" required />` +
+        `<button class="btn" type="submit">Continue</button></form>` +
+        (msg ? `<p class="error">${esc(msg)}</p>` : '')
+      document.getElementById('tf').addEventListener('submit', e => {
+        e.preventDefault()
+        location.hash = document.getElementById('tk').value.trim()
+        load()
+      })
+    }
+
+    async function load() {
+      const token = location.hash.slice(1)
+      if (!token) return askToken()
+      const res = await fetch('/api/files/' + encodeURIComponent(id), {
+        headers: { Authorization: 'Bearer ' + token },
+      })
+      if (!res.ok) {
+        return askToken(res.status === 404 ? 'This file does not exist, has expired, or the token is wrong.' : 'Something went wrong. Try again.')
+      }
+      const f = await res.json()
+      const expires = f.expires_at ? new Date(f.expires_at).toLocaleString() : 'after the upload completes'
+      card.innerHTML =
+        `<p class="title">${esc(f.filename || f.file_id)}</p>` +
+        `<dl>` +
+          `<dt>Size</dt><dd>${fmt(f.size_bytes)}${f.complete ? '' : ' (incomplete)'}</dd>` +
+          `<dt>Expires</dt><dd>${esc(expires)}</dd>` +
+          `<dt>Opens as</dt><dd>${f.disposition === 'attachment' ? 'Download' : 'Preview in browser'}</dd>` +
+          `<dt>Password</dt><dd>${f.password_protected ? 'Yes' : 'No'}</dd>` +
+          `<dt>Link</dt><dd><a href="${esc(f.download_url)}" target="_blank" rel="noopener">${esc(f.download_url)}</a></dd>` +
+        `</dl>` +
+        `<button class="btn danger" id="del">Delete file</button>` +
+        `<p class="error" id="err"></p>`
+      const btn = document.getElementById('del')
+      let armed = false
+      btn.addEventListener('click', async () => {
+        if (!armed) {
+          armed = true
+          btn.textContent = 'Click again to permanently delete'
+          return
+        }
+        btn.disabled = true
+        const r = await fetch('/api/files/' + encodeURIComponent(id), {
+          method: 'DELETE',
+          headers: { Authorization: 'Bearer ' + token },
+        })
+        if (r.ok) {
+          card.innerHTML = `<p class="success">✓ File deleted</p><p class="muted" style="margin-top:.25rem">The link no longer works.</p>`
+        } else {
+          btn.disabled = false
+          document.getElementById('err').textContent = 'Delete failed. Try again.'
+        }
+      })
+    }
+
+    load()
+  </script>
+</body>
+</html>
