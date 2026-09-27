@@ -286,14 +286,15 @@ func (ms *MCPServer) handleUploadFile(ctx context.Context, req mcp.CallToolReque
 	}
 
 	result := map[string]any{
-		"file_id":            tusID,
-		"management_token":   mgmtToken,
-		"manage_url":         ms.files.ManageURL(objectID, mgmtToken),
-		"download_url":       ms.files.ShareURL(objectID, filename),
-		"expires_at":         expiresAt,
-		"filename":           filename,
-		"size_bytes":         size,
-		"password_protected": password != "",
+		"file_id":             tusID,
+		"management_token":    mgmtToken,
+		"manage_url":          ms.files.ManageURL(objectID, mgmtToken),
+		"download_url":        ms.files.ShareURL(objectID, filename),
+		"direct_download_url": ms.files.DirectDownloadURL(objectID, filename),
+		"expires_at":          expiresAt,
+		"filename":            filename,
+		"size_bytes":          size,
+		"password_protected":  password != "",
 	}
 	return toolResultJSON(result)
 }

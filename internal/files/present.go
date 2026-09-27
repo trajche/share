@@ -11,6 +11,8 @@ import (
 type Presentation struct {
 	ContentType        string
 	ContentDisposition string
+	// Inline reports whether the browser should render the file itself.
+	Inline bool
 	// ContentSecurityPolicy is applied to every download. Files are served
 	// from the same origin as the web UI, so anything the browser renders
 	// must be inert.
@@ -127,6 +129,7 @@ func Present(meta handler.MetaData, forceDownload bool) Presentation {
 	if inline {
 		disposition = DispositionInline
 	}
+	p.Inline = inline
 	p.ContentDisposition = disposition
 	if name := meta[MetaFilename]; name != "" {
 		if v := mime.FormatMediaType(disposition, map[string]string{"filename": name}); v != "" {

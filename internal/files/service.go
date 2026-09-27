@@ -75,11 +75,26 @@ func (s *Service) DownloadURL(id string) string {
 // followed by the filename, so browser tabs, the PDF viewer and "Save as"
 // show a meaningful name. The filename segment is ignored when serving.
 func (s *Service) ShareURL(objectID, filename string) string {
-	u := strings.TrimRight(s.cfg.PublicURL, "/") + s.cfg.TUSBasePath + objectID
+	return strings.TrimRight(s.cfg.PublicURL, "/") + s.cfg.TUSBasePath + NamePath(objectID, filename)
+}
+
+// DirectDownloadPath is the path that always downloads the file
+// (Content-Disposition: attachment), never previews it.
+const DirectDownloadPath = "/dl/"
+
+// DirectDownloadURL returns the link that always downloads the file.
+func (s *Service) DirectDownloadURL(objectID, filename string) string {
+	return strings.TrimRight(s.cfg.PublicURL, "/") + DirectDownloadPath + NamePath(objectID, filename)
+}
+
+// NamePath returns "{objectID}/{escaped filename}" (or just the object ID
+// when there is no filename). Slashes in the name are replaced so the path
+// always has exactly two segments.
+func NamePath(objectID, filename string) string {
 	if name := strings.NewReplacer("/", "_", "\\", "_").Replace(filename); name != "" {
-		u += "/" + url.PathEscape(name)
+		return objectID + "/" + url.PathEscape(name)
 	}
-	return u
+	return objectID
 }
 
 // ManageURL returns the web page for managing an upload. The token goes in
@@ -206,14 +221,15 @@ func (s *Service) Describe(ctx context.Context, info *handler.FileInfo) map[stri
 		disposition = DispositionInline
 	}
 	return map[string]any{
-		"file_id":            info.ID,
-		"filename":           info.MetaData[MetaFilename],
-		"content_type":       FileType(info.MetaData),
-		"size_bytes":         info.Size,
-		"complete":           s.Complete(ctx, info),
-		"download_url":       s.ShareURL(objectID, info.MetaData[MetaFilename]),
-		"expires_at":         s.ExpiresAt(ctx, info),
-		"disposition":        disposition,
-		"password_protected": info.MetaData[MetaPasswordHash] != "",
+		"file_id":             info.ID,
+		"filename":            info.MetaData[MetaFilename],
+		"content_type":        FileType(info.MetaData),
+		"size_bytes":          info.Size,
+		"complete":            s.Complete(ctx, info),
+		"download_url":        s.ShareURL(objectID, info.MetaData[MetaFilename]),
+		"direct_download_url": s.DirectDownloadURL(objectID, info.MetaData[MetaFilename]),
+		"expires_at":          s.ExpiresAt(ctx, info),
+		"disposition":         disposition,
+		"password_protected":  info.MetaData[MetaPasswordHash] != "",
 	}
 }

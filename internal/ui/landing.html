@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex" />
+  <meta name="referrer" content="no-referrer" />
+  <title>{{.Filename}} — Share.mk</title>
+  <style>{{.CSS}}
+    .file { display: flex; gap: 0.75rem; align-items: flex-start; margin-bottom: 1.25rem; }
+    .file-icon { flex-shrink: 0; width: 2.5rem; height: 2.5rem; border-radius: 0.5rem; background: var(--subtle); color: var(--muted); display: flex; align-items: center; justify-content: center; }
+    .meta { font-size: 0.8125rem; color: var(--muted); margin-top: 0.2rem; }
+    .expires { font-size: 0.8125rem; color: var(--muted); margin-top: 0.75rem; text-align: center; }
+    a.btn { display: block; text-align: center; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1><a href="/">Share.mk</a></h1>
+    <div class="card">
+      <div class="file">
+        <div class="file-icon" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        </div>
+        <div>
+          <p class="title">{{.Filename}}</p>
+          <p class="meta">{{.Size}}{{with .ContentType}} · {{.}}{{end}}{{if .Protected}} · password protected{{end}}</p>
+        </div>
+      </div>
+      <a class="btn" href="{{.DownloadURL}}" download>Download</a>
+      {{if .ExpiresAt}}<p class="expires">Available until <time id="exp" datetime="{{.ExpiresAt}}">{{.ExpiresText}}</time></p>{{end}}
+    </div>
+  </div>
+  <script nonce="{{.Nonce}}">
+    const el = document.getElementById('exp')
+    if (el) {
+      const d = new Date(el.getAttribute('datetime'))
+      if (!isNaN(d)) el.textContent = d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+    }
+  </script>
+</body>
+</html>

@@ -229,7 +229,7 @@
       "get": {
         "summary": "Download file",
         "operationId": "downloadFile",
-        "description": "Streams the file. Supports `Range` requests (video seeking). Images, video, audio, PDF and plain text are served inline unless the upload set `disposition: attachment`; HTML, SVG source and code are shown as plain text; other types download. Add `?dl=1` to force a download.\n\nPassword-protected files need HTTP Basic auth (any username). Browsers get a password form instead.\n\nThe same file is also served at `/files/{objectId}/{filename}` (the `Upload-Share-URL`); the filename segment is ignored. Browsers get HTML pages for errors (404, 409); API clients get JSON.",
+        "description": "Streams the file. Supports `Range` requests (video seeking). Images, video, audio, PDF and plain text are served inline unless the upload set `disposition: attachment`; HTML, SVG source and code are shown as plain text; other types download. Add `?dl=1` to force a download.\n\nPassword-protected files need HTTP Basic auth (any username). Browsers get a password form instead.\n\nThe same file is also served at `/files/{objectId}/{filename}` (the `Upload-Share-URL`); the filename segment is ignored. Browsers get HTML pages for errors (404, 409); API clients get JSON.\n\nBrowser requests (`Accept: text/html`) for files that cannot be previewed, or were uploaded with `disposition: attachment`, get an HTML page with the filename, size, expiry and a Download button instead of the bytes.",
         "security": [
           {},
           {
@@ -462,6 +462,54 @@
         }
       }
     },
+    "/dl/{id}/{filename}": {
+      "get": {
+        "summary": "Download file (always as attachment)",
+        "operationId": "directDownload",
+        "description": "Same as `GET /files/{id}?dl=1`. The filename segment is optional and cosmetic. Password-protected files accept Basic auth or the unlock cookie.",
+        "security": [
+          {},
+          {
+            "filePassword": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/id"
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File content with Content-Disposition: attachment",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "Partial content"
+          },
+          "401": {
+            "description": "Password required"
+          },
+          "404": {
+            "description": "File not found or expired"
+          }
+        }
+      }
+    },
     "/mcp": {
       "post": {
         "summary": "MCP Streamable HTTP endpoint",
@@ -545,6 +593,10 @@
           },
           "password_protected": {
             "type": "boolean"
+          },
+          "direct_download_url": {
+            "type": "string",
+            "description": "Link that always downloads (/dl/\u2026)"
           }
         }
       },

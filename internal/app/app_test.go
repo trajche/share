@@ -19,6 +19,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/tus/tusd/v2/pkg/handler"
 	"sharemk/internal/files"
 	"sharemk/internal/hooks"
@@ -458,7 +459,7 @@ func TestPasswordProtection(t *testing.T) {
 	for _, c := range resp.Cookies() {
 		cookie = c
 	}
-	if cookie == nil || !cookie.HttpOnly || cookie.Path != "/files/" || cookie.SameSite != http.SameSiteLaxMode {
+	if cookie == nil || !cookie.HttpOnly || cookie.Path != "/" || cookie.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("unlock cookie = %+v", cookie)
 	}
 
@@ -868,4 +869,178 @@ func TestMCPHasItsOwnConcurrencyLimit(t *testing.T) {
 	<-done
 	<-done
 	expectStatus(t, m.post(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`), http.StatusOK)
+}
+
+func TestLandingPageForNonPreviewableFiles(t *testing.T) {
+	e := newEnv(t)
+	zip := e.upload("PKzip", map[string]string{"filename": "archive.zip", "filetype": "application/zip"})
+	share := e.srv.URL + "/files/" + zip.objectID + "/archive.zip"
+	direct := e.srv.URL + "/dl/" + zip.objectID + "/archive.zip"
+	html := []string{"Accept", "text/html,application/xhtml+xml"}
+
+	waitForTag(t, e, zip)
+
+	// Browser: landing page with filename, size, expiry and download link.
+	resp := e.get(share, html...)
+	expectStatus(t, resp, http.StatusOK)
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	if resp.Header.Get("Content-Disposition") != "" {
+		t.Error("landing page must not be a download")
+	}
+	body := readBody(resp)
+	for _, want := range []string{"archive.zip", "5 B", `href="/dl/` + zip.objectID + `/archive.zip"`, "Available until", `datetime="`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("landing page missing %q", want)
+		}
+	}
+	if strings.Contains(body, "PKzip") {
+		t.Error("landing page contains file content")
+	}
+
+	// API clients, ?dl=1 and /dl/ get the bytes as an attachment.
+	for _, c := range []struct {
+		url    string
+		header []string
+	}{
+		{share, nil},
+		{share + "?dl=1", html},
+		{direct, html},
+		{e.srv.URL + "/dl/" + zip.objectID, nil},
+	} {
+		resp := e.get(c.url, c.header...)
+		expectStatus(t, resp, http.StatusOK)
+		if cd := resp.Header.Get("Content-Disposition"); !strings.HasPrefix(cd, "attachment") {
+			t.Errorf("%s: Content-Disposition = %q", c.url, cd)
+		}
+		if b := readBody(resp); b != "PKzip" {
+			t.Errorf("%s: body = %q", c.url, b)
+		}
+	}
+}
+
+func TestPreviewableFilesSkipLanding(t *testing.T) {
+	e := newEnv(t)
+	png := e.upload("PNG", map[string]string{"filename": "a.png", "filetype": "image/png"})
+	html := []string{"Accept", "text/html"}
+
+	resp := e.get(e.srv.URL+"/files/"+png.objectID+"/a.png", html...)
+	expectStatus(t, resp, http.StatusOK)
+	if ct, cd := resp.Header.Get("Content-Type"), resp.Header.Get("Content-Disposition"); ct != "image/png" || !strings.HasPrefix(cd, "inline") {
+		t.Errorf("main link: %q / %q, want inline image", ct, cd)
+	}
+
+	resp = e.get(e.srv.URL+"/dl/"+png.objectID+"/a.png", html...)
+	expectStatus(t, resp, http.StatusOK)
+	if cd := resp.Header.Get("Content-Disposition"); !strings.HasPrefix(cd, "attachment") {
+		t.Errorf("/dl/: Content-Disposition = %q", cd)
+	}
+
+	// "Force download" uploads get the landing page in a browser.
+	forced := e.upload("PNG", map[string]string{"filename": "b.png", "filetype": "image/png", "disposition": "attachment"})
+	waitForTag(t, e, forced)
+	resp = e.get(forced.location, html...)
+	expectStatus(t, resp, http.StatusOK)
+	if body := readBody(resp); !strings.Contains(body, `href="/dl/`+forced.objectID+`/b.png"`) {
+		t.Error("forced-download upload did not get the landing page")
+	}
+}
+
+func TestDirectDownloadRouting(t *testing.T) {
+	e := newEnv(t)
+	u := e.upload("x", map[string]string{"filename": "a.bin"})
+	expectStatus(t, e.get(e.srv.URL+"/dl/"), http.StatusNotFound)
+	expectStatus(t, e.get(e.srv.URL+"/dl/"+u.objectID+"/a/b"), http.StatusNotFound)
+	expectStatus(t, e.get(e.srv.URL+"/dl/doesnotexist/a.bin"), http.StatusNotFound)
+	req, _ := http.NewRequest(http.MethodDelete, e.srv.URL+"/dl/"+u.objectID, nil)
+	expectStatus(t, e.do(req), http.StatusMethodNotAllowed)
+
+	var info map[string]any
+	json.NewDecoder(e.get(e.srv.URL+"/api/files/"+u.id, "Authorization", "Bearer "+u.token).Body).Decode(&info) //nolint:errcheck
+	if want := "https://share.test/dl/" + u.objectID + "/a.bin"; info["direct_download_url"] != want {
+		t.Errorf("direct_download_url = %v, want %v", info["direct_download_url"], want)
+	}
+}
+
+func TestLandingHidesExpiredFiles(t *testing.T) {
+	e := newEnv(t)
+	u := e.upload("x", map[string]string{"filename": "old.zip", "filetype": "application/zip"})
+	waitForTag(t, e, u)
+
+	past := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	if _, err := e.s3.PutObjectTagging(context.Background(), &s3.PutObjectTaggingInput{
+		Bucket: aws.String(testutil.Bucket), Key: aws.String("uploads/" + u.objectID + ".info"),
+		Tagging: &s3types.Tagging{TagSet: []s3types.Tag{{Key: aws.String("expires-at"), Value: aws.String(past)}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resp := e.get(u.location, "Accept", "text/html")
+	expectStatus(t, resp, http.StatusNotFound)
+	if body := readBody(resp); !strings.Contains(body, "File not available") {
+		t.Error("expired file did not show the not-available page")
+	}
+}
+
+func TestPasswordProtectedLandingAndDirectDownload(t *testing.T) {
+	e := newEnv(t)
+	u := e.upload("secret zip", map[string]string{"filename": "s.zip", "filetype": "application/zip", "password": "pw"})
+	share := e.srv.URL + "/files/" + u.objectID + "/s.zip"
+
+	jar, _ := cookiejar.New(nil)
+	browser := &http.Client{Jar: jar}
+	get := func(url string) *http.Response {
+		req, _ := http.NewRequest(http.MethodGet, url, nil)
+		req.Header.Set("Accept", "text/html")
+		resp, err := browser.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { resp.Body.Close() })
+		return resp
+	}
+
+	// Locked: /dl/ also asks for the password and posts back to itself.
+	resp := get(e.srv.URL + "/dl/" + u.objectID + "/s.zip")
+	expectStatus(t, resp, http.StatusUnauthorized)
+	if body := readBody(resp); !strings.Contains(body, `action="/dl/`+u.objectID+`/s.zip"`) {
+		t.Errorf("unlock form on /dl/ does not post back to /dl/: %s", body)
+	}
+
+	// Unlock on the share link (redirect followed), then land on the page.
+	req, _ := http.NewRequest(http.MethodPost, share, strings.NewReader(url.Values{"password": {"pw"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "text/html") // copied onto the redirected GET, like a browser
+	resp, err := browser.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	expectStatus(t, resp, http.StatusOK)
+	if body := readBody(resp); !strings.Contains(body, "password protected") || !strings.Contains(body, "/dl/"+u.objectID) {
+		t.Errorf("expected landing page after unlock, got: %s", body)
+	}
+
+	// The unlock cookie also covers /dl/.
+	resp = get(e.srv.URL + "/dl/" + u.objectID + "/s.zip")
+	expectStatus(t, resp, http.StatusOK)
+	if b := readBody(resp); b != "secret zip" {
+		t.Errorf("download body = %q", b)
+	}
+}
+
+// waitForTag waits for the asynchronous completion hook to tag an upload.
+func waitForTag(t *testing.T, e *env, u upload) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		out, err := e.s3.GetObjectTagging(context.Background(), &s3.GetObjectTaggingInput{
+			Bucket: aws.String(testutil.Bucket), Key: aws.String("uploads/" + u.objectID + ".info"),
+		})
+		if err == nil && len(out.TagSet) > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("upload was never tagged")
 }

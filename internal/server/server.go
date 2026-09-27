@@ -49,6 +49,7 @@ func New(cfg *config.Config, fs *files.Service, tusHandler *handler.Handler, lim
 	tusPrefix := strings.TrimSuffix(cfg.TUSBasePath, "/") // "/files/" → "/files"
 	s.tus = http.StripPrefix(tusPrefix, tusHandler)
 	mux.Handle(cfg.TUSBasePath, limiter.Middleware(http.HandlerFunc(s.handleFiles)))
+	mux.Handle(files.DirectDownloadPath, limiter.Middleware(http.HandlerFunc(s.handleDirect)))
 
 	s.handler = mux
 	return s
@@ -83,7 +84,7 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		s.handleDownload(w, r, id)
+		s.handleDownload(w, r, id, false)
 	case http.MethodPost:
 		// tus only POSTs to the base path, so a POST to an upload URL is
 		// the password form.
@@ -94,6 +95,24 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		s.tus.ServeHTTP(&metadataFilter{ResponseWriter: w}, r)
 	default:
 		s.tus.ServeHTTP(w, r)
+	}
+}
+
+// handleDirect serves /dl/{id}[/{name}]: always a download, never a preview.
+func (s *Server) handleDirect(w http.ResponseWriter, r *http.Request) {
+	id, name, hasName := strings.Cut(strings.TrimPrefix(r.URL.Path, files.DirectDownloadPath), "/")
+	if id == "" || (hasName && (name == "" || strings.Contains(name, "/"))) {
+		s.fail(w, r, http.StatusNotFound)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		s.handleDownload(w, r, id, true)
+	case http.MethodPost:
+		s.handleUnlock(w, r, id) // password form posts back to the same URL
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 

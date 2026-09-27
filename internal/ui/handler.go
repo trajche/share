@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"crypto/rand"
 	_ "embed"
 	"html/template"
 	"net/http"
@@ -21,9 +22,13 @@ var unlockHTML string
 //go:embed message.html
 var messageHTML string
 
+//go:embed landing.html
+var landingHTML string
+
 var (
 	unlockTmpl  = template.Must(template.New("unlock").Parse(unlockHTML))
 	messageTmpl = template.Must(template.New("message").Parse(messageHTML))
+	landingTmpl = template.Must(template.New("landing").Parse(landingHTML))
 )
 
 func Handler() http.Handler {
@@ -89,4 +94,30 @@ func RenderMessage(w http.ResponseWriter, status int, data MessageData) {
 	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
 	w.WriteHeader(status)
 	messageTmpl.Execute(w, data) //nolint:errcheck
+}
+
+// LandingData fills the page shown for files that cannot be previewed.
+type LandingData struct {
+	Filename    string
+	Size        string
+	ContentType string
+	ExpiresAt   string // RFC 3339, empty if unknown
+	ExpiresText string // UTC fallback when JavaScript is off
+	DownloadURL string
+	Protected   bool
+	CSS         template.CSS
+	Nonce       string
+}
+
+// RenderLanding writes the download page for a non-previewable file.
+func RenderLanding(w http.ResponseWriter, data LandingData) {
+	data.CSS = template.CSS(pageCSS)
+	data.Nonce = rand.Text()
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-"+data.Nonce+"'")
+	w.WriteHeader(http.StatusOK)
+	landingTmpl.Execute(w, data) //nolint:errcheck
 }

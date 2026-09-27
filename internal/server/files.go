@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -25,8 +26,10 @@ const (
 
 // handleDownload serves a completed upload straight from S3, honouring Range
 // requests (needed for video seeking and Safari playback), the inline vs.
-// download policy, and password protection.
-func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id string) {
+// download policy, and password protection. force (the /dl/ path or ?dl=1)
+// always downloads. Browsers opening a file that cannot be previewed get a
+// landing page with a download button instead of an immediate download.
+func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id string, force bool) {
 	info, ok := s.loadOrFail(w, r, id)
 	if !ok {
 		return
@@ -35,6 +38,13 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id strin
 	protected := info.MetaData[files.MetaPasswordHash] != ""
 	if protected && !s.passwordOK(r, info.MetaData[files.MetaPasswordHash], objectID) {
 		s.passwordRequired(w, r, id, "")
+		return
+	}
+
+	force = force || r.URL.Query().Get("dl") == "1"
+	p := files.Present(info.MetaData, force)
+	if !force && !p.Inline && wantsHTML(r) {
+		s.renderLanding(w, r, info, objectID)
 		return
 	}
 
@@ -71,8 +81,6 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id strin
 	}
 	defer out.Body.Close()
 
-	p := files.Present(info.MetaData, r.URL.Query().Get("dl") == "1")
-
 	h := w.Header()
 	h.Set("Content-Type", p.ContentType)
 	h.Set("Content-Disposition", p.ContentDisposition)
@@ -108,6 +116,48 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id strin
 	if _, err := io.Copy(w, out.Body); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Debug("download: copy interrupted", "id", id, "error", err)
 	}
+}
+
+// renderLanding shows the filename, size, expiry and a download button.
+func (s *Server) renderLanding(w http.ResponseWriter, r *http.Request, info *handler.FileInfo, objectID string) {
+	if !s.files.Complete(r.Context(), info) {
+		s.fail(w, r, http.StatusConflict)
+		return
+	}
+	data := ui.LandingData{
+		Filename:    info.MetaData[files.MetaFilename],
+		Size:        humanSize(info.Size),
+		ContentType: files.FileType(info.MetaData),
+		DownloadURL: files.DirectDownloadPath + files.NamePath(objectID, info.MetaData[files.MetaFilename]),
+		Protected:   info.MetaData[files.MetaPasswordHash] != "",
+	}
+	if data.Filename == "" {
+		data.Filename = "Untitled file"
+	}
+	if at, err := time.Parse(time.RFC3339, s.files.ExpiresAt(r.Context(), info)); err == nil {
+		// The expiry worker runs periodically; don't offer files past their
+		// expiry in the meantime.
+		if time.Now().After(at) {
+			s.fail(w, r, http.StatusNotFound)
+			return
+		}
+		data.ExpiresAt = at.UTC().Format(time.RFC3339)
+		data.ExpiresText = at.UTC().Format("2 Jan 2006, 15:04 UTC")
+	}
+	ui.RenderLanding(w, data)
+}
+
+func humanSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit && exp < 3; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGT"[exp])
 }
 
 // passwordOK accepts either HTTP Basic auth (any username) or the unlock
@@ -170,7 +220,7 @@ func (s *Server) handleUnlock(w http.ResponseWriter, r *http.Request, id string)
 	http.SetCookie(w, &http.Cookie{
 		Name:     unlockCookiePrefix + objectID,
 		Value:    files.UnlockValue(hash, objectID),
-		Path:     s.cfg.TUSBasePath,
+		Path:     "/", // covers /files/ and /dl/
 		MaxAge:   int(unlockCookieMaxAge.Seconds()),
 		HttpOnly: true,
 		Secure:   strings.HasPrefix(s.cfg.PublicURL, "https://"),

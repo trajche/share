@@ -493,13 +493,21 @@
         onSuccess() {
           finished()
           const link = shareURL || tusUpload.url
+          // Same file, always downloaded instead of previewed.
+          const dlLink = shareURL ? shareURL.replace('/files/', '/dl/') : tusUpload.url + '?dl=1'
           document.getElementById('pt-' + id).style.display = 'none'
           let html =
             `<span class="text-success">✓ Uploaded</span>` +
             (password ? `<span class="badge">password protected</span>` : '') +
+            `<p class="url-label">Share link (opens in browser)</p>` +
             `<div class="url-row">` +
               `<span class="url-text" title="${esc(link)}">${esc(link)}</span>` +
               `<button class="copy-btn" id="cp-${id}">Copy</button>` +
+            `</div>` +
+            `<p class="url-label">Direct download link</p>` +
+            `<div class="url-row">` +
+              `<span class="url-text" title="${esc(dlLink)}">${esc(dlLink)}</span>` +
+              `<button class="copy-btn" id="cpd-${id}">Copy</button>` +
             `</div>`
           if (manageURL) {
             html +=
@@ -512,6 +520,7 @@
           }
           document.getElementById('st-' + id).innerHTML = html
           document.getElementById('cp-' + id).addEventListener('click', () => copyURL(link, 'cp-' + id))
+          document.getElementById('cpd-' + id).addEventListener('click', () => copyURL(dlLink, 'cpd-' + id))
           if (manageURL) {
             document.getElementById('cpm-' + id).addEventListener('click', () => copyURL(manageURL, 'cpm-' + id))
           }

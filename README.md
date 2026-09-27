@@ -64,7 +64,11 @@ Share links have the form `/files/{objectId}/{filename}`; the filename is cosmet
 PDF viewer, "Save as") and `/files/{id}` works too.
 Links open in the browser for images, video (with seeking), audio, PDF and plain text (UTF-8 by default).
 HTML, SVG source and code are shown as plain text, never executed. Everything else downloads.
-`disposition: attachment` at upload, or `?dl=1` on any link, forces a download.
+`disposition: attachment` at upload, or `?dl=1` on any link, forces a download. `/dl/{objectId}/{filename}`
+always downloads too (returned as `direct_download_url` by MCP and the info API).
+When a browser opens the share link of a file that can't be previewed (or was uploaded with
+`disposition: attachment`), it gets a page with the filename, size, expiry and a Download button;
+API clients such as curl still receive the file itself.
 All downloads are sent with a sandboxing `Content-Security-Policy` and `nosniff`.
 
 ### Password-protected files
