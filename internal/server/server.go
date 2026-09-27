@@ -67,8 +67,12 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 // and password unlocking are handled here; everything else is tus.
 func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, s.cfg.TUSBasePath)
-	if id == "" || strings.Contains(id, "/") {
+	if id == "" {
 		s.tus.ServeHTTP(w, r)
+		return
+	}
+	if strings.Contains(id, "/") {
+		writeError(w, http.StatusNotFound, "file not found")
 		return
 	}
 
