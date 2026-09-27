@@ -70,8 +70,9 @@ Values are base64-encoded key=value pairs, comma-separated:
 - disposition — inline (default) or attachment
 - password — optional download password
 
-The 201 response includes an `Upload-Management-Token` header (shown once) and an
-`Upload-Manage-URL` header (web page to delete the file). Keep them.
+The 201 response includes an `Upload-Management-Token` header (shown once), an
+`Upload-Manage-URL` header (web page to delete the file) and an `Upload-Share-URL` header
+(the link to share, e.g. https://share.mk/files/{objectId}/report.pdf). Keep them.
 
 ### Example (curl)
 

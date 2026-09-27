@@ -102,6 +102,12 @@
                 "schema": {
                   "type": "string"
                 }
+              },
+              "Upload-Share-URL": {
+                "description": "Short link to share: /files/{objectId}/{filename}. The filename segment is cosmetic.",
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -223,7 +229,7 @@
       "get": {
         "summary": "Download file",
         "operationId": "downloadFile",
-        "description": "Streams the file. Supports `Range` requests (video seeking). Images, video, audio, PDF and plain text are served inline unless the upload set `disposition: attachment`; HTML, SVG source and code are shown as plain text; other types download. Add `?dl=1` to force a download.\n\nPassword-protected files need HTTP Basic auth (any username). Browsers get a password form instead.",
+        "description": "Streams the file. Supports `Range` requests (video seeking). Images, video, audio, PDF and plain text are served inline unless the upload set `disposition: attachment`; HTML, SVG source and code are shown as plain text; other types download. Add `?dl=1` to force a download.\n\nPassword-protected files need HTTP Basic auth (any username). Browsers get a password form instead.\n\nThe same file is also served at `/files/{objectId}/{filename}` (the `Upload-Share-URL`); the filename segment is ignored. Browsers get HTML pages for errors (404, 409); API clients get JSON.",
         "security": [
           {},
           {

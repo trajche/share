@@ -57,6 +57,9 @@ func TestPreCreateDefaultsAndToken(t *testing.T) {
 	if got := resp.Header[HeaderManageURL]; got != wantURL {
 		t.Errorf("manage URL = %q, want %q", got, wantURL)
 	}
+	if got, want := resp.Header[HeaderShareURL], "https://share.test/files/"+changes.ID+"/a.txt"; got != want {
+		t.Errorf("share URL = %q, want %q", got, want)
+	}
 	if resp.StatusCode != 0 {
 		t.Errorf("status overridden to %d", resp.StatusCode)
 	}

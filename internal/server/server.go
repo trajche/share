@@ -71,8 +71,13 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		s.tus.ServeHTTP(w, r)
 		return
 	}
-	if strings.Contains(id, "/") {
-		writeError(w, http.StatusNotFound, "file not found")
+	// Share links may append the filename: /files/{id}/{name}. The name is
+	// cosmetic (tab titles, PDF viewer, "Save as") and only valid for
+	// downloads and the password form.
+	id, name, hasName := strings.Cut(id, "/")
+	if hasName && (name == "" || strings.Contains(name, "/") ||
+		(r.Method != http.MethodGet && r.Method != http.MethodPost)) {
+		s.fail(w, r, http.StatusNotFound)
 		return
 	}
 
@@ -127,6 +132,40 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v) //nolint:errcheck
+}
+
+// wantsHTML reports whether the request comes from a browser navigation.
+func wantsHTML(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept"), "text/html")
+}
+
+var failMessages = map[int]struct{ title, text, api string }{
+	http.StatusNotFound: {
+		"File not available",
+		"This link has expired, was deleted by its owner, or never existed.",
+		"file not found",
+	},
+	http.StatusConflict: {
+		"Upload still in progress",
+		"This file hasn't finished uploading yet. Try again in a moment.",
+		"upload is not complete yet",
+	},
+	http.StatusBadGateway: {
+		"Something went wrong",
+		"We couldn't read this file right now. Please try again shortly.",
+		"failed to read file",
+	},
+}
+
+// fail reports a download error as a page for browsers and JSON for API
+// clients.
+func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int) {
+	m := failMessages[status]
+	if wantsHTML(r) {
+		ui.RenderMessage(w, status, ui.MessageData{Title: m.title, Text: m.text})
+		return
+	}
+	writeError(w, status, m.api)
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {

@@ -273,7 +273,7 @@ func (ms *MCPServer) handleUploadFile(ctx context.Context, req mcp.CallToolReque
 		"file_id":            tusID,
 		"management_token":   mgmtToken,
 		"manage_url":         ms.files.ManageURL(objectID, mgmtToken),
-		"download_url":       ms.files.DownloadURL(tusID),
+		"download_url":       ms.files.ShareURL(objectID, filename),
 		"expires_at":         expiresAt,
 		"filename":           filename,
 		"size_bytes":         size,

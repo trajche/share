@@ -62,10 +62,10 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, id strin
 		case files.IsNotFound(err):
 			// The .info exists but the data object does not: s3store only
 			// creates it when the multipart upload completes.
-			writeError(w, http.StatusConflict, "upload is not complete yet")
+			s.fail(w, r, http.StatusConflict)
 		default:
 			slog.Error("download: GetObject failed", "id", id, "error", err)
-			writeError(w, http.StatusBadGateway, "failed to read file")
+			s.fail(w, r, http.StatusBadGateway)
 		}
 		return
 	}
@@ -125,9 +125,9 @@ func (s *Server) passwordOK(r *http.Request, hash, objectID string) bool {
 // passwordRequired shows the password form to browsers and a JSON error to
 // API clients.
 func (s *Server) passwordRequired(w http.ResponseWriter, r *http.Request, id, errMsg string) {
-	if strings.Contains(r.Header.Get("Accept"), "text/html") {
+	if wantsHTML(r) {
 		ui.RenderUnlock(w, http.StatusUnauthorized, ui.UnlockData{
-			Action:   s.cfg.TUSBasePath + id,
+			Action:   r.URL.EscapedPath(),
 			Error:    errMsg,
 			Download: r.URL.Query().Get("dl") == "1" || r.PostFormValue("dl") == "1",
 		})
@@ -151,7 +151,7 @@ func (s *Server) handleUnlock(w http.ResponseWriter, r *http.Request, id string)
 	if !ok {
 		return
 	}
-	target := s.cfg.TUSBasePath + id
+	target := r.URL.EscapedPath()
 	if r.PostFormValue("dl") == "1" {
 		target += "?dl=1"
 	}
@@ -240,12 +240,12 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) loadOrFail(w http.ResponseWriter, r *http.Request, id string) (*handler.FileInfo, bool) {
 	info, err := s.files.Load(r.Context(), id)
 	if errors.Is(err, files.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "file not found")
+		s.fail(w, r, http.StatusNotFound)
 		return nil, false
 	}
 	if err != nil {
 		slog.Error("files: load failed", "id", id, "error", err)
-		writeError(w, http.StatusBadGateway, "failed to read file metadata")
+		s.fail(w, r, http.StatusBadGateway)
 		return nil, false
 	}
 	return info, true

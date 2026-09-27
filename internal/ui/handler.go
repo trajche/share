@@ -18,7 +18,13 @@ var pageCSS string
 //go:embed unlock.html
 var unlockHTML string
 
-var unlockTmpl = template.Must(template.New("unlock").Parse(unlockHTML))
+//go:embed message.html
+var messageHTML string
+
+var (
+	unlockTmpl  = template.Must(template.New("unlock").Parse(unlockHTML))
+	messageTmpl = template.Must(template.New("message").Parse(messageHTML))
+)
 
 func Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -64,4 +70,23 @@ func RenderUnlock(w http.ResponseWriter, status int, data UnlockData) {
 	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'")
 	w.WriteHeader(status)
 	unlockTmpl.Execute(w, data) //nolint:errcheck
+}
+
+// MessageData fills a simple status page (e.g. an expired link).
+type MessageData struct {
+	Title string
+	Text  string
+	CSS   template.CSS
+}
+
+// RenderMessage writes a status page for browser visitors.
+func RenderMessage(w http.ResponseWriter, status int, data MessageData) {
+	data.CSS = template.CSS(pageCSS)
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+	w.WriteHeader(status)
+	messageTmpl.Execute(w, data) //nolint:errcheck
 }

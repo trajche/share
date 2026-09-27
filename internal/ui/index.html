@@ -81,6 +81,7 @@
 
     /* Expiry pills */
     .section-label {
+      display: block;
       font-size: 0.6875rem;
       font-weight: 600;
       color: var(--muted);
@@ -122,6 +123,10 @@
       cursor: pointer;
       transition: border-color 0.15s, background 0.15s;
       user-select: none;
+    }
+    .dropzone:focus-within {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.15);
     }
     .dropzone:hover,
     .dropzone.drag-over {
@@ -292,6 +297,19 @@
       margin-left: 0.375rem;
     }
 
+    .retry-btn {
+      margin-left: 0.375rem;
+      padding: 0.1rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 0.3rem;
+      font-size: 0.6875rem;
+      font-weight: 500;
+      background: var(--card);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .retry-btn:hover { background: var(--border); }
+
     .text-success { color: var(--success); }
     .text-error   { color: var(--error); }
   </style>
@@ -304,26 +322,26 @@
     </header>
 
     <div class="card">
-      <p class="section-label">Expires in</p>
-      <div class="pills" data-group="expires">
-        <button class="pill" data-value="1h">1h</button>
-        <button class="pill" data-value="6h">6h</button>
-        <button class="pill active" data-value="24h">24h</button>
-        <button class="pill" data-value="7d">7d</button>
-        <button class="pill" data-value="30d">30d</button>
+      <p class="section-label" id="lbl-expires">Expires in</p>
+      <div class="pills" data-group="expires" role="group" aria-labelledby="lbl-expires">
+        <button class="pill" data-value="1h" aria-pressed="false">1h</button>
+        <button class="pill" data-value="6h" aria-pressed="false">6h</button>
+        <button class="pill active" data-value="24h" aria-pressed="true">24h</button>
+        <button class="pill" data-value="7d" aria-pressed="false">7d</button>
+        <button class="pill" data-value="30d" aria-pressed="false">30d</button>
       </div>
 
-      <p class="section-label">Links open as</p>
-      <div class="pills" data-group="disposition">
-        <button class="pill active" data-value="inline" title="Images, video, audio, PDF and text open in the browser">Preview in browser</button>
-        <button class="pill" data-value="attachment" title="Always download the file">Force download</button>
+      <p class="section-label" id="lbl-disposition">Links open as</p>
+      <div class="pills" data-group="disposition" role="group" aria-labelledby="lbl-disposition">
+        <button class="pill active" data-value="inline" aria-pressed="true" title="Images, video, audio, PDF and text open in the browser">Preview in browser</button>
+        <button class="pill" data-value="attachment" aria-pressed="false" title="Always download the file">Force download</button>
       </div>
 
-      <p class="section-label">Password <span style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></p>
+      <label class="section-label" for="password">Password <span style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></label>
       <input class="input" id="password" type="password" autocomplete="new-password" placeholder="Leave empty for a public link" />
 
       <div class="dropzone" id="dropzone">
-        <input type="file" id="file-input" multiple />
+        <input type="file" id="file-input" multiple aria-label="Choose files to upload" />
         <div class="dz-icon">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -352,8 +370,12 @@
     document.querySelectorAll('.pills').forEach(group => {
       group.querySelectorAll('.pill').forEach(pill => {
         pill.addEventListener('click', () => {
-          group.querySelectorAll('.pill').forEach(p => p.classList.remove('active'))
+          group.querySelectorAll('.pill').forEach(p => {
+            p.classList.remove('active')
+            p.setAttribute('aria-pressed', 'false')
+          })
           pill.classList.add('active')
+          pill.setAttribute('aria-pressed', 'true')
           options[group.dataset.group] = pill.dataset.value
         })
       })
@@ -383,6 +405,40 @@
 
     function upload(files) { files.forEach(uploadOne) }
 
+    // The server allows 5 concurrent uploads per IP; stay below that so a
+    // large drop is queued instead of rejected.
+    const MAX_PARALLEL = 3
+    const queue = []
+    let active = 0
+    function schedule(start) { queue.push(start); pump() }
+    function pump() {
+      while (active < MAX_PARALLEL && queue.length) {
+        active++
+        queue.shift()()
+      }
+    }
+    function finished() { active--; pump() }
+
+    // Retry transient failures (busy server, locks) but not other 4xx.
+    function shouldRetry(err) {
+      const s = err.originalResponse ? err.originalResponse.getStatus() : 0
+      if (s === 429 || s === 409 || s === 423) return true
+      return !(s >= 400 && s < 500)
+    }
+
+    function friendlyError(err) {
+      const res = err.originalResponse
+      const s = res ? res.getStatus() : 0
+      if (s === 429) return 'The server is busy. Please try again in a moment.'
+      if (s === 413) return 'This file is larger than the maximum allowed size.'
+      if (s >= 400 && s < 500) {
+        // tusd errors look like "ERR_CODE: message".
+        const body = (res.getBody() || '').trim()
+        return body.replace(/^ERR_[A-Z_]+:\s*/, '') || 'The upload was rejected.'
+      }
+      return 'Network or server error.'
+    }
+
     function uploadOne(file) {
       const id  = crypto.randomUUID()
       const el  = document.createElement('div')
@@ -397,7 +453,7 @@
           <span class="file-size">${fmt(file.size)}</span>
         </div>
         <div class="progress-track" id="pt-${id}"><div class="progress-fill" id="pf-${id}"></div></div>
-        <div class="file-status" id="st-${id}">Starting…</div>
+        <div class="file-status" id="st-${id}">Queued…</div>
       `
       document.getElementById('file-list').prepend(el)
 
@@ -410,18 +466,24 @@
       }
       if (password) metadata.password = password
       let manageURL = ''
+      let shareURL = ''
 
       const tusUpload = new tus.Upload(file, {
         endpoint: '/files/',
         chunkSize: 5 * 1024 * 1024,
-        retryDelays: [0, 1000, 3000],
+        retryDelays: [0, 1000, 3000, 5000, 10000],
+        onShouldRetry(err) {
+          const retry = shouldRetry(err)
+          if (retry) document.getElementById('st-' + id).textContent = 'Retrying…'
+          return retry
+        },
         metadata,
         // The management token is only returned when the upload is created,
         // so never resume a previous upload from browser storage.
         storeFingerprintForResuming: false,
         onAfterResponse(req, res) {
-          const v = res.getHeader('Upload-Manage-URL')
-          if (v) manageURL = v
+          manageURL = res.getHeader('Upload-Manage-URL') || manageURL
+          shareURL = res.getHeader('Upload-Share-URL') || shareURL
         },
         onProgress(sent, total) {
           const pct = total ? Math.round(sent / total * 100) : 0
@@ -429,12 +491,14 @@
           document.getElementById('st-' + id).textContent = pct + '%'
         },
         onSuccess() {
+          finished()
+          const link = shareURL || tusUpload.url
           document.getElementById('pt-' + id).style.display = 'none'
           let html =
             `<span class="text-success">✓ Uploaded</span>` +
             (password ? `<span class="badge">password protected</span>` : '') +
             `<div class="url-row">` +
-              `<span class="url-text" title="${esc(tusUpload.url)}">${esc(tusUpload.url)}</span>` +
+              `<span class="url-text" title="${esc(link)}">${esc(link)}</span>` +
               `<button class="copy-btn" id="cp-${id}">Copy</button>` +
             `</div>`
           if (manageURL) {
@@ -447,18 +511,28 @@
               `<p class="warn">Keep this link private and save it somewhere. It's the only way to delete the file before it expires, and it can't be recovered.</p>`
           }
           document.getElementById('st-' + id).innerHTML = html
-          document.getElementById('cp-' + id).addEventListener('click', () => copyURL(tusUpload.url, 'cp-' + id))
+          document.getElementById('cp-' + id).addEventListener('click', () => copyURL(link, 'cp-' + id))
           if (manageURL) {
             document.getElementById('cpm-' + id).addEventListener('click', () => copyURL(manageURL, 'cpm-' + id))
           }
         },
         onError(err) {
+          finished()
           document.getElementById('pt-' + id).style.display = 'none'
           document.getElementById('st-' + id).innerHTML =
-            `<span class="text-error">Upload failed — ${esc(err.message)}</span>`
+            `<span class="text-error">Upload failed. ${esc(friendlyError(err))}</span>` +
+            `<button class="retry-btn" id="rt-${id}">Retry</button>`
+          document.getElementById('rt-' + id).addEventListener('click', () => {
+            document.getElementById('pt-' + id).style.display = ''
+            document.getElementById('st-' + id).textContent = 'Queued…'
+            schedule(() => tusUpload.start())
+          })
         },
       })
-      tusUpload.start()
+      schedule(() => {
+        document.getElementById('st-' + id).textContent = 'Starting…'
+        tusUpload.start()
+      })
     }
 
     function copyURL(url, btnId) {

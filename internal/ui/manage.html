@@ -31,19 +31,31 @@
     function askToken(msg) {
       card.innerHTML =
         `<p class="title">Manage file</p>` +
-        `<p class="muted">Paste the management token you received when uploading.</p>` +
-        `<form id="tf"><input class="input" id="tk" placeholder="Management token" autocomplete="off" required />` +
+        `<p class="muted">Paste the delete link (or management token) you received when uploading.</p>` +
+        `<form id="tf"><label for="tk" class="muted" style="position:absolute;left:-9999px">Delete link or token</label>` +
+        `<input class="input" id="tk" placeholder="https://share.mk/manage/…#…" autocomplete="off" required />` +
         `<button class="btn" type="submit">Continue</button></form>` +
         (msg ? `<p class="error">${esc(msg)}</p>` : '')
       document.getElementById('tf').addEventListener('submit', e => {
         e.preventDefault()
-        location.hash = document.getElementById('tk').value.trim()
+        let token = document.getElementById('tk').value.trim()
+        // Accept the full delete link: the token is the part after "#".
+        const hashAt = token.indexOf('#')
+        if (hashAt >= 0) {
+          const m = token.slice(0, hashAt).match(/\/manage\/([^/?#]+)/)
+          token = token.slice(hashAt + 1).trim()
+          if (m && decodeURIComponent(m[1]) !== id) {
+            location.href = '/manage/' + m[1] + '#' + token
+            return
+          }
+        }
+        location.hash = token
         load()
       })
     }
 
     async function load() {
-      const token = location.hash.slice(1)
+      const token = decodeURIComponent(location.hash.slice(1)).trim()
       if (!token) return askToken()
       const res = await fetch('/api/files/' + encodeURIComponent(id), {
         headers: { Authorization: 'Bearer ' + token },

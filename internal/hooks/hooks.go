@@ -18,6 +18,8 @@ import (
 const (
 	HeaderManagementToken = "Upload-Management-Token"
 	HeaderManageURL       = "Upload-Manage-URL"
+	// HeaderShareURL is the short, filename-bearing download link to share.
+	HeaderShareURL = "Upload-Share-URL"
 )
 
 type Hooks struct {
@@ -75,6 +77,7 @@ func (h *Hooks) PreCreate(event handler.HookEvent) (handler.HTTPResponse, handle
 		Header: handler.HTTPHeader{
 			HeaderManagementToken: token,
 			HeaderManageURL:       h.files.ManageURL(objectID, token),
+			HeaderShareURL:        h.files.ShareURL(objectID, meta[files.MetaFilename]),
 		},
 	}
 	return resp, handler.FileInfoChanges{ID: objectID, MetaData: meta}, nil

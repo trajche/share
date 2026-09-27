@@ -368,7 +368,7 @@ func TestInfoAPI(t *testing.T) {
 
 	want := map[string]any{
 		"file_id": u.id, "filename": "a.txt", "content_type": "text/plain", "size_bytes": 5.0,
-		"complete": true, "download_url": "https://share.test/files/" + u.id,
+		"complete": true, "download_url": "https://share.test/files/" + u.objectID + "/a.txt",
 		"disposition": "inline", "password_protected": false,
 	}
 	for k, v := range want {
@@ -583,6 +583,10 @@ func TestMCPTools(t *testing.T) {
 		t.Errorf("upload result = %v", res)
 	}
 
+	if want := "https://share.test/files/" + objectID + "/clip.mp4"; res["download_url"] != want {
+		t.Errorf("download_url = %v, want %v", res["download_url"], want)
+	}
+
 	// The MCP upload is served by the normal download path.
 	download := e.srv.URL + "/files/" + id
 	expectStatus(t, e.get(download), http.StatusUnauthorized)
@@ -680,4 +684,121 @@ func TestLegacyPlaintextToken(t *testing.T) {
 	req, _ = http.NewRequest(http.MethodDelete, e.srv.URL+"/api/files/legacy+mcp", nil)
 	req.Header.Set("Authorization", "Bearer oldtoken")
 	expectStatus(t, e.do(req), http.StatusNoContent)
+}
+
+func TestShareURL(t *testing.T) {
+	e := newEnv(t)
+	u := e.upload("hello", map[string]string{"filename": "бележка 1.txt", "filetype": "text/plain"})
+
+	resp := e.create(1, map[string]string{"filename": "a/b.txt"})
+	if got := resp.Header.Get(hooks.HeaderShareURL); !strings.HasSuffix(got, "/a_b.txt") {
+		t.Errorf("slash in filename not sanitised: %q", got)
+	}
+
+	share := "https://share.test/files/" + u.objectID + "/" + url.PathEscape("бележка 1.txt")
+	var info map[string]any
+	json.NewDecoder(e.get(e.srv.URL+"/api/files/"+u.id, "Authorization", "Bearer "+u.token).Body).Decode(&info) //nolint:errcheck
+	if info["download_url"] != share {
+		t.Errorf("download_url = %v, want %v", info["download_url"], share)
+	}
+
+	local := strings.Replace(share, "https://share.test", e.srv.URL, 1)
+	resp = e.get(local)
+	expectStatus(t, resp, http.StatusOK)
+	if body := readBody(resp); body != "hello" {
+		t.Errorf("body = %q", body)
+	}
+	// Any name works; only the ID matters.
+	expectStatus(t, e.get(e.srv.URL+"/files/"+u.objectID+"/other.txt"), http.StatusOK)
+
+	expectStatus(t, e.get(e.srv.URL+"/files/"+u.objectID+"/a/b"), http.StatusNotFound)
+	expectStatus(t, e.get(e.srv.URL+"/files/"+u.objectID+"/"), http.StatusNotFound)
+	req, _ := http.NewRequest(http.MethodDelete, local, nil)
+	req.Header.Set("Authorization", "Bearer "+u.token)
+	expectStatus(t, e.do(req), http.StatusNotFound)
+}
+
+func TestPasswordUnlockOnShareURL(t *testing.T) {
+	e := newEnv(t)
+	u := e.upload("secret", map[string]string{"filename": "s.txt", "filetype": "text/plain", "password": "pw"})
+	path := "/files/" + u.objectID + "/s.txt"
+
+	resp := e.get(e.srv.URL+path, "Accept", "text/html")
+	expectStatus(t, resp, http.StatusUnauthorized)
+	if body := readBody(resp); !strings.Contains(body, `action="`+path+`"`) {
+		t.Errorf("form does not post back to the share URL: %s", body)
+	}
+
+	jar, _ := cookiejar.New(nil)
+	browser := &http.Client{Jar: jar, CheckRedirect: e.client.CheckRedirect}
+	resp, err := browser.PostForm(e.srv.URL+path, url.Values{"password": {"pw"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	expectStatus(t, resp, http.StatusSeeOther)
+	if loc := resp.Header.Get("Location"); loc != path {
+		t.Errorf("redirect = %q, want %q", loc, path)
+	}
+	// The cookie is per object, so it also unlocks the tus URL.
+	for _, p := range []string{path, "/files/" + u.id} {
+		resp, err := browser.Get(e.srv.URL + p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expectStatus(t, resp, http.StatusOK)
+		resp.Body.Close()
+	}
+}
+
+func TestBrowserErrorPages(t *testing.T) {
+	e := newEnv(t)
+	pending := e.start(10, map[string]string{"filename": "later.txt"})
+
+	cases := []struct {
+		url    string
+		status int
+		text   string
+	}{
+		{e.srv.URL + "/files/doesnotexist", http.StatusNotFound, "File not available"},
+		{e.srv.URL + "/files/doesnotexist/name.pdf", http.StatusNotFound, "File not available"},
+		{pending.location, http.StatusConflict, "Upload still in progress"},
+	}
+	for _, c := range cases {
+		resp := e.get(c.url, "Accept", "text/html,application/xhtml+xml")
+		expectStatus(t, resp, c.status)
+		if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+			t.Errorf("%s: Content-Type = %q", c.url, ct)
+		}
+		if body := readBody(resp); !strings.Contains(body, c.text) || !strings.Contains(body, `href="/"`) {
+			t.Errorf("%s: page missing %q", c.url, c.text)
+		}
+
+		resp = e.get(c.url)
+		expectStatus(t, resp, c.status)
+		if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("%s: API Content-Type = %q", c.url, ct)
+		}
+	}
+}
+
+func TestMediaIsNotSandboxed(t *testing.T) {
+	e := newEnv(t)
+	for filetype, sandboxed := range map[string]bool{
+		"video/mp4":     false,
+		"audio/mpeg":    false,
+		"image/png":     false,
+		"image/svg+xml": true,
+		"text/html":     true,
+		"text/plain":    true,
+	} {
+		u := e.upload("x", map[string]string{"filetype": filetype})
+		csp := e.get(u.location).Header.Get("Content-Security-Policy")
+		if got := strings.Contains(csp, "sandbox"); got != sandboxed {
+			t.Errorf("%s: sandboxed = %v, want %v (%q)", filetype, got, sandboxed, csp)
+		}
+		if !strings.Contains(csp, "default-src 'none'") {
+			t.Errorf("%s: CSP missing default-src 'none': %q", filetype, csp)
+		}
+	}
 }

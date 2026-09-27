@@ -39,7 +39,7 @@ func New(cfg *config.Config, s3Client *s3.Client) (*App, error) {
 	hooksHandler := hooks.New(cfg, fileService)
 
 	cors := handler.DefaultCorsConfig
-	cors.ExposeHeaders += ", " + hooks.HeaderManagementToken + ", " + hooks.HeaderManageURL
+	cors.ExposeHeaders += ", " + hooks.HeaderManagementToken + ", " + hooks.HeaderManageURL + ", " + hooks.HeaderShareURL
 	cors.AllowHeaders += ", " + hooks.HeaderManagementToken
 
 	tusHandler, err := handler.NewHandler(handler.Config{

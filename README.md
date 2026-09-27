@@ -39,6 +39,7 @@ curl -X PATCH "https://share.mk/files/{id}" \
 
 # → Upload-Management-Token: {token}   (shown once — keep it)
 # → Upload-Manage-URL: https://share.mk/manage/{objectId}#{token}
+# → Upload-Share-URL:  https://share.mk/files/{objectId}/report.pdf   (link to share)
 
 # 3. Download
 curl https://share.mk/files/{id} -o report.pdf
@@ -59,7 +60,9 @@ Upload metadata keys (values base64-encoded):
 
 ### Preview vs. download
 
-Links open in the browser for images, video (with seeking), audio, PDF and plain text.
+Share links have the form `/files/{objectId}/{filename}`; the filename is cosmetic (tab titles,
+PDF viewer, "Save as") and `/files/{id}` works too.
+Links open in the browser for images, video (with seeking), audio, PDF and plain text (UTF-8 by default).
 HTML, SVG source and code are shown as plain text, never executed. Everything else downloads.
 `disposition: attachment` at upload, or `?dl=1` on any link, forces a download.
 All downloads are sent with a sandboxing `Content-Security-Policy` and `nosniff`.

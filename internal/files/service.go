@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -68,6 +69,17 @@ func (s *Service) Key(objectID string) string {
 // DownloadURL returns the public URL for an upload ID.
 func (s *Service) DownloadURL(id string) string {
 	return strings.TrimRight(s.cfg.PublicURL, "/") + s.cfg.TUSBasePath + id
+}
+
+// ShareURL returns the link to hand out for an upload: the short object ID
+// followed by the filename, so browser tabs, the PDF viewer and "Save as"
+// show a meaningful name. The filename segment is ignored when serving.
+func (s *Service) ShareURL(objectID, filename string) string {
+	u := strings.TrimRight(s.cfg.PublicURL, "/") + s.cfg.TUSBasePath + objectID
+	if name := strings.NewReplacer("/", "_", "\\", "_").Replace(filename); name != "" {
+		u += "/" + url.PathEscape(name)
+	}
+	return u
 }
 
 // ManageURL returns the web page for managing an upload. The token goes in
@@ -188,6 +200,7 @@ func (s *Service) ExpiresAt(ctx context.Context, info *handler.FileInfo) string 
 // Describe returns the public description of an upload. It never includes
 // secrets.
 func (s *Service) Describe(ctx context.Context, info *handler.FileInfo) map[string]any {
+	objectID, _, _ := SplitID(info.ID)
 	disposition := info.MetaData[MetaDisposition]
 	if disposition == "" {
 		disposition = DispositionInline
@@ -198,7 +211,7 @@ func (s *Service) Describe(ctx context.Context, info *handler.FileInfo) map[stri
 		"content_type":       FileType(info.MetaData),
 		"size_bytes":         info.Size,
 		"complete":           s.Complete(ctx, info),
-		"download_url":       s.DownloadURL(info.ID),
+		"download_url":       s.ShareURL(objectID, info.MetaData[MetaFilename]),
 		"expires_at":         s.ExpiresAt(ctx, info),
 		"disposition":        disposition,
 		"password_protected": info.MetaData[MetaPasswordHash] != "",

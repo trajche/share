@@ -18,8 +18,15 @@ type Presentation struct {
 }
 
 // sandboxCSP makes a rendered file an opaque-origin document with no script
-// execution, forms, or external requests. Images, audio and video still play.
+// execution, forms, or external requests. It is used for everything that
+// could carry script (SVG, text shown as plain text, downloads).
 const sandboxCSP = "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox"
+
+// mediaCSP is used for raster images, audio and video. These cannot run
+// script, and the browser's media document must stay same-origin: from an
+// opaque (sandboxed) origin the player's own range requests are cross-site,
+// so the SameSite unlock cookie of password-protected files is not sent.
+const mediaCSP = "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'"
 
 // pdfCSP omits the sandbox directive, which stops the built-in PDF viewers
 // in Chrome and Firefox from loading.
@@ -55,7 +62,6 @@ var inlineMedia = map[string]bool{
 	"application/ogg":  true,
 	"application/pdf":  true,
 	"application/json": true,
-	"text/plain":       true,
 }
 
 // textLike lists non-text/* types whose contents are shown as plain text
@@ -80,9 +86,9 @@ func FileType(meta handler.MetaData) string {
 }
 
 // Present decides the Content-Type, Content-Disposition and CSP for a
-// download. Safe media (images, video, audio, PDF, plain text) is shown
-// inline; markup and code are shown inline as plain text so they cannot
-// execute; everything else is downloaded. forceDownload (from ?dl=1) and an
+// download. Safe media (images, video, audio, PDF) is shown inline; text,
+// markup and code are shown inline as plain text (UTF-8 unless the upload
+// named a charset) so they cannot execute; everything else is downloaded. forceDownload (from ?dl=1) and an
 // upload-time "disposition: attachment" both force a download.
 func Present(meta handler.MetaData, forceDownload bool) Presentation {
 	mediaType, params, err := mime.ParseMediaType(FileType(meta))
@@ -97,8 +103,13 @@ func Present(meta handler.MetaData, forceDownload bool) Presentation {
 
 	switch {
 	case inlineMedia[mediaType]:
-		if mediaType == "application/pdf" {
+		switch {
+		case mediaType == "application/pdf":
 			p.ContentSecurityPolicy = pdfCSP
+		case mediaType == "image/svg+xml", mediaType == "application/json":
+			// Keep the sandbox: SVG can contain script.
+		default:
+			p.ContentSecurityPolicy = mediaCSP
 		}
 	case strings.HasPrefix(mediaType, "text/") || textLike[mediaType]:
 		if inline {
