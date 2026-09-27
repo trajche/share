@@ -12,6 +12,7 @@ import (
 	"sharemk/internal/app"
 	"sharemk/internal/config"
 	"sharemk/internal/expiry"
+	"sharemk/internal/openapi"
 	"sharemk/internal/s3client"
 )
 
@@ -24,6 +25,7 @@ func main() {
 
 	setupLogger(cfg.LogLevel)
 	slog.Info("starting share.mk", "version", version)
+	openapi.SetVersion(version)
 
 	// 2. Build S3 client.
 	s3Client, err := s3client.New(cfg)
