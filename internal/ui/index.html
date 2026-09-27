@@ -331,12 +331,6 @@
         <button class="pill" data-value="30d" aria-pressed="false">30d</button>
       </div>
 
-      <p class="section-label" id="lbl-disposition">Links open as</p>
-      <div class="pills" data-group="disposition" role="group" aria-labelledby="lbl-disposition">
-        <button class="pill active" data-value="inline" aria-pressed="true" title="Images, video, audio, PDF and text open in the browser">Preview in browser</button>
-        <button class="pill" data-value="attachment" aria-pressed="false" title="Always download the file">Force download</button>
-      </div>
-
       <label class="section-label" for="password">Password <span style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></label>
       <input class="input" id="password" type="password" autocomplete="new-password" placeholder="Leave empty for a public link" />
 
@@ -364,7 +358,7 @@
   </div>
 
   <script>
-    const options = { expires: '24h', disposition: 'inline' }
+    const options = { expires: '24h' }
 
     // Option pills (one active per group)
     document.querySelectorAll('.pills').forEach(group => {
@@ -462,7 +456,6 @@
         filename: file.name,
         filetype: file.type || 'application/octet-stream',
         'expires-in': options.expires,
-        disposition: options.disposition,
       }
       if (password) metadata.password = password
       let manageURL = ''
