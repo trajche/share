@@ -1044,3 +1044,50 @@ func waitForTag(t *testing.T, e *env, u upload) {
 	}
 	t.Fatal("upload was never tagged")
 }
+
+// Every path and method documented in the OpenAPI spec must be routed to a
+// real handler (not the mux's default 404 or 405).
+func TestOpenAPIPathsAreRouted(t *testing.T) {
+	e := newEnv(t)
+	raw, err := os.ReadFile("../openapi/spec.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spec struct {
+		Paths map[string]map[string]any `json:"paths"`
+	}
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		t.Fatalf("spec is not valid JSON: %v", err)
+	}
+	if len(spec.Paths) == 0 {
+		t.Fatal("spec has no paths")
+	}
+
+	for path, ops := range spec.Paths {
+		target := strings.NewReplacer("{id}", "doesnotexist", "{filename}", "x.txt").Replace(path)
+		for method := range ops {
+			// Some endpoints (GET /mcp) stream indefinitely; only the status
+			// line and first bytes matter here.
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			req, _ := http.NewRequestWithContext(ctx, strings.ToUpper(method), e.srv.URL+target, strings.NewReader("{}"))
+			req.Header.Set("Tus-Resumable", "1.0.0")
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := e.client.Do(req)
+			if err != nil {
+				cancel()
+				t.Errorf("%s %s: %v", strings.ToUpper(method), path, err)
+				continue
+			}
+			var body string
+			if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+				b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+				body = string(b)
+			}
+			resp.Body.Close()
+			cancel()
+			if resp.StatusCode == http.StatusMethodNotAllowed || body == "404 page not found\n" {
+				t.Errorf("%s %s is documented but not routed (status %d)", strings.ToUpper(method), path, resp.StatusCode)
+			}
+		}
+	}
+}

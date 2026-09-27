@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "share.mk",
-    "description": "Anonymous resumable file upload service backed by S3. Uploads use the tus protocol; each upload returns a management token for deleting it.",
-    "version": "1.0.0"
+    "version": "1.1.5",
+    "description": "Anonymous, zero-signup file sharing with automatic expiry.\n\n**Upload** with the [tus](https://tus.io) resumable protocol (`POST /files/`, then `PATCH`), or from AI assistants via the MCP endpoint (`/mcp`).\n\n**Links** returned for every upload:\n- Share link `/files/{objectId}/{filename}` (`Upload-Share-URL`): opens in the browser, or shows a download page for files that can't be previewed.\n- Direct download `/dl/{objectId}/{filename}`: always downloads.\n- Manage link `/manage/{objectId}#{token}` (`Upload-Manage-URL`): web page to view and delete the file.\n\n**Management token**: returned once when the upload is created (`Upload-Management-Token` header or MCP `management_token`). It is the only way to read file info or delete the file early. Only its hash is stored.\n\n**Limits**: max file size 10 GiB; expiry 1h, 6h, 24h (default), 7d or 30d; 5 concurrent uploads (POST/PATCH) per IP and 50 overall; MCP requests up to 16 MiB with 2 concurrent per IP. Unfinished uploads idle for 48h are removed."
   },
   "servers": [
     {
@@ -11,60 +11,54 @@
       "description": "Production"
     }
   ],
-  "paths": {
-    "/health": {
-      "get": {
-        "summary": "Health check",
-        "operationId": "getHealth",
-        "responses": {
-          "200": {
-            "description": "Service is healthy",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "status": {
-                      "type": "string",
-                      "example": "ok"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
+  "tags": [
+    {
+      "name": "Upload",
+      "description": "tus resumable upload protocol"
     },
+    {
+      "name": "Download",
+      "description": "Share links, direct downloads and password unlock"
+    },
+    {
+      "name": "Management",
+      "description": "File info and deletion with the management token"
+    },
+    {
+      "name": "MCP",
+      "description": "Model Context Protocol endpoint for AI assistants"
+    },
+    {
+      "name": "Service",
+      "description": "Health and documentation"
+    }
+  ],
+  "paths": {
     "/files/": {
       "post": {
+        "tags": [
+          "Upload"
+        ],
         "summary": "Create upload",
-        "description": "Initiate a new resumable upload. Pass the `Upload-Metadata` header with comma-separated `key base64(value)` pairs. Supported keys:\n\n- `filename` \u2014 original filename\n- `filetype` \u2014 MIME type\n- `expires-in` \u2014 one of 1h, 6h, 24h, 7d, 30d (default 24h)\n- `disposition` \u2014 `inline` (default: images, video, audio, PDF and text open in the browser) or `attachment` (always download)\n- `password` \u2014 optional; required to download the file. Only a hash is stored.\n\nThe response carries a management token that is shown only once. Keep it to delete the file later.",
         "operationId": "createUpload",
+        "description": "Starts a resumable upload. Send metadata in `Upload-Metadata` as comma-separated `key base64(value)` pairs:\n\n| Key | Value |\n|---|---|\n| `filename` | Original filename |\n| `filetype` | MIME type (`content-type` is accepted as an alias) |\n| `expires-in` | `1h`, `6h`, `24h` (default), `7d`, `30d` |\n| `password` | Optional download password; only a PBKDF2 hash is stored |\n| `disposition` | Optional. `attachment` never previews the file: browsers get the download page, other clients the bytes as an attachment. Default `inline`. |\n\nInvalid values are rejected with 400 and no upload is created.\n\nThe response carries the management token (shown **once**), the manage URL and the share URL. Then send the bytes with `PATCH` to the `Location` URL.\n\nExample: `Upload-Metadata: filename cmVwb3J0LnBkZg==,filetype YXBwbGljYXRpb24vcGRm,expires-in N2Q=`",
         "parameters": [
           {
-            "name": "Tus-Resumable",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "1.0.0"
-              ]
-            }
+            "$ref": "#/components/parameters/tusResumable"
           },
           {
             "name": "Upload-Length",
             "in": "header",
             "description": "Total upload size in bytes",
             "schema": {
-              "type": "integer"
+              "type": "integer",
+              "minimum": 0
             }
           },
           {
             "name": "Upload-Defer-Length",
             "in": "header",
-            "description": "Set to 1 to defer the upload length",
+            "description": "Set to 1 to send the length later",
             "schema": {
               "type": "integer",
               "enum": [
@@ -75,10 +69,11 @@
           {
             "name": "Upload-Metadata",
             "in": "header",
-            "description": "Comma-separated list of base64-encoded metadata pairs",
+            "description": "Comma-separated `key base64(value)` pairs",
             "schema": {
               "type": "string"
-            }
+            },
+            "example": "filename cmVwb3J0LnBkZg==,expires-in N2Q="
           }
         ],
         "responses": {
@@ -86,66 +81,73 @@
             "description": "Upload created",
             "headers": {
               "Location": {
-                "description": "URL of the created upload",
+                "description": "tus upload URL for PATCH/HEAD (`/files/{objectId}+{multipartId}`)",
                 "schema": {
                   "type": "string"
                 }
               },
               "Upload-Management-Token": {
-                "description": "Secret token for the management API and DELETE. Returned only once.",
+                "description": "Secret token for the management API. Returned only once.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
                 }
               },
               "Upload-Manage-URL": {
-                "description": "Web page for viewing and deleting the upload; the token is in the URL fragment.",
+                "description": "Web page to view and delete the upload; the token is in the URL fragment.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uri"
                 }
               },
               "Upload-Share-URL": {
-                "description": "Short link to share: /files/{objectId}/{filename}. The filename segment is cosmetic.",
+                "description": "Link to share: `/files/{objectId}/{filename}`.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uri"
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid metadata (bad expires-in, disposition or password)"
+            "description": "Invalid metadata (expires-in, disposition or password)",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "ERR_INVALID_EXPIRES_IN: invalid expires-in \"1y\"; valid values: 1h, 6h, 24h, 7d, 30d"
+              }
+            }
           },
           "413": {
-            "description": "Upload size exceeds server limit"
+            "description": "Upload larger than the 10 GiB limit"
           },
           "429": {
-            "description": "Rate limit exceeded"
+            "description": "Too many concurrent uploads from this IP or overall"
           }
         }
       }
     },
     "/files/{id}": {
       "head": {
-        "summary": "Check upload status",
+        "tags": [
+          "Upload"
+        ],
+        "summary": "Get upload status",
         "operationId": "getUploadStatus",
+        "description": "tus status check (`Upload-Offset`, `Upload-Length`). `Upload-Metadata` never includes secret values (password hash, token hash).",
         "parameters": [
           {
             "$ref": "#/components/parameters/id"
           },
           {
-            "name": "Tus-Resumable",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "1.0.0"
-              ]
-            }
+            "$ref": "#/components/parameters/tusResumable"
           }
         ],
         "responses": {
           "200": {
-            "description": "Upload info",
+            "description": "Upload status",
             "headers": {
               "Upload-Offset": {
                 "schema": {
@@ -156,32 +158,32 @@
                 "schema": {
                   "type": "integer"
                 }
+              },
+              "Upload-Metadata": {
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
           "404": {
             "description": "Upload not found"
           }
-        },
-        "description": "tus upload status. Secret metadata (password hash, token hash) is never included in `Upload-Metadata`."
+        }
       },
       "patch": {
-        "summary": "Upload chunk",
+        "tags": [
+          "Upload"
+        ],
+        "summary": "Upload bytes",
         "operationId": "uploadChunk",
+        "description": "Appends bytes at `Upload-Offset`. Repeat until the whole file is sent; resume after interruptions by reading the offset with HEAD.",
         "parameters": [
           {
             "$ref": "#/components/parameters/id"
           },
           {
-            "name": "Tus-Resumable",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "1.0.0"
-              ]
-            }
+            "$ref": "#/components/parameters/tusResumable"
           },
           {
             "name": "Upload-Offset",
@@ -216,20 +218,33 @@
         },
         "responses": {
           "204": {
-            "description": "Chunk accepted"
+            "description": "Bytes accepted",
+            "headers": {
+              "Upload-Offset": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Upload not found"
           },
           "409": {
             "description": "Offset mismatch"
           },
           "429": {
-            "description": "Rate limit exceeded"
+            "description": "Too many concurrent uploads"
           }
         }
       },
       "get": {
-        "summary": "Download file",
+        "tags": [
+          "Download"
+        ],
+        "summary": "Download or preview a file",
         "operationId": "downloadFile",
-        "description": "Streams the file. Supports `Range` requests (video seeking). Images, video, audio, PDF and plain text are served inline unless the upload set `disposition: attachment`; HTML, SVG source and code are shown as plain text; other types download. Add `?dl=1` to force a download.\n\nPassword-protected files need HTTP Basic auth (any username). Browsers get a password form instead.\n\nThe same file is also served at `/files/{objectId}/{filename}` (the `Upload-Share-URL`); the filename segment is ignored. Browsers get HTML pages for errors (404, 409); API clients get JSON.\n\nBrowser requests (`Accept: text/html`) for files that cannot be previewed, or were uploaded with `disposition: attachment`, get an HTML page with the filename, size, expiry and a Download button instead of the bytes.",
+        "description": "Streams the file. Supports `Range` (video seeking) and `If-None-Match`.\n\n**How it is served**\n- Images, video, audio and PDF: inline (opens in the browser).\n- Text, HTML, SVG source and code: inline as `text/plain` (UTF-8 unless the upload named a charset), never executed.\n- Anything else, or uploads created with `disposition: attachment`: browsers (`Accept: text/html`) get a page with the filename, size, expiry and a Download button linking to `/dl/…`; other clients (curl, scripts, AI tools) get the bytes as an attachment.\n- `?dl=1` always downloads (same as `/dl/…`).\n\nEvery response carries `X-Content-Type-Options: nosniff` and a restrictive `Content-Security-Policy`.\n\n**Password-protected files** need HTTP Basic auth (password as the Basic password, any username, e.g. `curl -u :secret`). Browsers get a password form that posts back to the same URL and sets an unlock cookie (12h).\n\nThe share link `/files/{objectId}/{filename}` behaves the same.",
         "security": [
           {},
           {
@@ -243,7 +258,7 @@
           {
             "name": "dl",
             "in": "query",
-            "description": "Set to 1 to force `Content-Disposition: attachment`",
+            "description": "`1` forces a download",
             "schema": {
               "type": "integer",
               "enum": [
@@ -262,12 +277,33 @@
         ],
         "responses": {
           "200": {
-            "description": "File content",
+            "description": "File content, or the HTML download page for browsers when the file cannot be previewed",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                }
+              }
+            },
             "content": {
               "*/*": {
                 "schema": {
                   "type": "string",
                   "format": "binary"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string",
+                  "description": "Download page"
                 }
               }
             }
@@ -275,24 +311,173 @@
           "206": {
             "description": "Partial content (Range request)"
           },
+          "304": {
+            "description": "Not modified (If-None-Match)"
+          },
           "401": {
-            "description": "Password required or wrong password"
+            "description": "Password required or wrong password. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
-            "description": "File not found or expired"
+            "description": "File not found, deleted or expired. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
-            "description": "Upload not complete yet"
+            "description": "Upload not complete yet. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "416": {
-            "description": "Range not satisfiable"
+            "description": "Range not satisfiable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Storage backend error. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Download"
+        ],
+        "summary": "Unlock a password-protected file (browser form)",
+        "operationId": "unlockFile",
+        "description": "Target of the HTML password form on `/files/{id}`. On success sets the unlock cookie (`sm_unlock_{objectId}`, `Path=/`, 12h, HttpOnly) and redirects (303) back to the same URL, so it covers `/files/` and `/dl/`. API clients should use Basic auth on GET instead.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "password"
+                ],
+                "properties": {
+                  "password": {
+                    "type": "string"
+                  },
+                  "dl": {
+                    "type": "string",
+                    "enum": [
+                      "1"
+                    ],
+                    "description": "Redirect to the forced-download URL"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "303": {
+            "description": "Unlocked; redirects to the file",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Wrong password. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       },
       "delete": {
+        "tags": [
+          "Management"
+        ],
         "summary": "Delete file",
         "operationId": "deleteUpload",
-        "description": "Permanently deletes the upload (also aborts it if still in progress). Requires the management token as `Authorization: Bearer <token>` or in the `Upload-Management-Token` header.",
+        "description": "Same as `DELETE /api/files/{id}`. Also aborts an unfinished upload. The token may be sent as `Authorization: Bearer <token>` or in the `Upload-Management-Token` header.",
         "security": [
           {
             "managementToken": []
@@ -318,7 +503,17 @@
             }
           },
           "404": {
-            "description": "Unknown file or wrong token",
+            "description": "Unknown file or wrong token (same response, to prevent ID enumeration)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Storage backend error",
             "content": {
               "application/json": {
                 "schema": {
@@ -328,11 +523,385 @@
             }
           }
         }
+      }
+    },
+    "/files/{id}/{filename}": {
+      "get": {
+        "tags": [
+          "Download"
+        ],
+        "summary": "Share link",
+        "operationId": "downloadFileByName",
+        "description": "Same as `GET /files/{id}`; the filename segment is ignored and only makes tab titles, the PDF viewer and \"Save as\" show the real name.",
+        "security": [
+          {},
+          {
+            "filePassword": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/id"
+          },
+          {
+            "$ref": "#/components/parameters/filename"
+          },
+          {
+            "name": "dl",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "enum": [
+                1
+              ]
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File content, or the HTML download page for browsers when the file cannot be previewed",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string",
+                  "description": "Download page"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "Partial content (Range request)"
+          },
+          "304": {
+            "description": "Not modified (If-None-Match)"
+          },
+          "401": {
+            "description": "Password required or wrong password. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found, deleted or expired. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Upload not complete yet. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "Range not satisfiable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Storage backend error. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
       },
       "post": {
-        "summary": "Unlock password-protected file (browser form)",
-        "operationId": "unlockFile",
-        "description": "Submits the password form. On success sets an unlock cookie and redirects (303) to the file. API clients should use Basic auth on GET instead.",
+        "tags": [
+          "Download"
+        ],
+        "summary": "Unlock a password-protected file (browser form)",
+        "operationId": "unlockFileByName",
+        "description": "Target of the HTML password form on `/files/{id}/{filename}`. On success sets the unlock cookie (`sm_unlock_{objectId}`, `Path=/`, 12h, HttpOnly) and redirects (303) back to the same URL, so it covers `/files/` and `/dl/`. API clients should use Basic auth on GET instead.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/id"
+          },
+          {
+            "$ref": "#/components/parameters/filename"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "password"
+                ],
+                "properties": {
+                  "password": {
+                    "type": "string"
+                  },
+                  "dl": {
+                    "type": "string",
+                    "enum": [
+                      "1"
+                    ],
+                    "description": "Redirect to the forced-download URL"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "303": {
+            "description": "Unlocked; redirects to the file",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Wrong password. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dl/{id}": {
+      "get": {
+        "tags": [
+          "Download"
+        ],
+        "summary": "Direct download",
+        "operationId": "directDownload",
+        "description": "Always downloads (`Content-Disposition: attachment`), never previews. Same as `?dl=1`.",
+        "security": [
+          {},
+          {
+            "filePassword": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/id"
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File content (`Content-Disposition: attachment`)",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "Partial content (Range request)"
+          },
+          "304": {
+            "description": "Not modified (If-None-Match)"
+          },
+          "401": {
+            "description": "Password required or wrong password. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found, deleted or expired. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Upload not complete yet. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "Range not satisfiable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Storage backend error. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Download"
+        ],
+        "summary": "Unlock a password-protected file (browser form)",
+        "operationId": "unlockDirect",
+        "description": "Target of the HTML password form on `/dl/{id}`. On success sets the unlock cookie (`sm_unlock_{objectId}`, `Path=/`, 12h, HttpOnly) and redirects (303) back to the same URL, so it covers `/files/` and `/dl/`. API clients should use Basic auth on GET instead.",
         "parameters": [
           {
             "$ref": "#/components/parameters/id"
@@ -344,6 +913,9 @@
             "application/x-www-form-urlencoded": {
               "schema": {
                 "type": "object",
+                "required": [
+                  "password"
+                ],
                 "properties": {
                   "password": {
                     "type": "string"
@@ -352,31 +924,291 @@
                     "type": "string",
                     "enum": [
                       "1"
-                    ]
+                    ],
+                    "description": "Redirect to the forced-download URL"
                   }
-                },
-                "required": [
-                  "password"
-                ]
+                }
               }
             }
           }
         },
         "responses": {
           "303": {
-            "description": "Unlocked; redirects to the file"
+            "description": "Unlocked; redirects to the file",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
-            "description": "Wrong password"
+            "description": "Wrong password. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
-            "description": "File not found"
+            "description": "File not found. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dl/{id}/{filename}": {
+      "get": {
+        "tags": [
+          "Download"
+        ],
+        "summary": "Direct download link",
+        "operationId": "directDownloadByName",
+        "description": "Always downloads. Returned as `direct_download_url`; the filename segment is cosmetic.",
+        "security": [
+          {},
+          {
+            "filePassword": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/id"
+          },
+          {
+            "$ref": "#/components/parameters/filename"
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File content (`Content-Disposition: attachment`)",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "Partial content (Range request)"
+          },
+          "304": {
+            "description": "Not modified (If-None-Match)"
+          },
+          "401": {
+            "description": "Password required or wrong password. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found, deleted or expired. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Upload not complete yet. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "Range not satisfiable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Storage backend error. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Download"
+        ],
+        "summary": "Unlock a password-protected file (browser form)",
+        "operationId": "unlockDirectByName",
+        "description": "Target of the HTML password form on `/dl/{id}/{filename}`. On success sets the unlock cookie (`sm_unlock_{objectId}`, `Path=/`, 12h, HttpOnly) and redirects (303) back to the same URL, so it covers `/files/` and `/dl/`. API clients should use Basic auth on GET instead.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/id"
+          },
+          {
+            "$ref": "#/components/parameters/filename"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "password"
+                ],
+                "properties": {
+                  "password": {
+                    "type": "string"
+                  },
+                  "dl": {
+                    "type": "string",
+                    "enum": [
+                      "1"
+                    ],
+                    "description": "Redirect to the forced-download URL"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "303": {
+            "description": "Unlocked; redirects to the file",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Wrong password. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found. Browsers (`Accept: text/html`) get an HTML page instead of JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       }
     },
     "/api/files/{id}": {
       "get": {
+        "tags": [
+          "Management"
+        ],
         "summary": "Get file info",
         "operationId": "getFileInfo",
         "security": [
@@ -411,7 +1243,17 @@
             }
           },
           "404": {
-            "description": "Unknown file or wrong token",
+            "description": "Unknown file or wrong token (same response, to prevent ID enumeration)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Storage backend error",
             "content": {
               "application/json": {
                 "schema": {
@@ -423,8 +1265,12 @@
         }
       },
       "delete": {
+        "tags": [
+          "Management"
+        ],
         "summary": "Delete file",
         "operationId": "deleteFile",
+        "description": "Permanently deletes the file (and aborts it if still uploading).",
         "security": [
           {
             "managementToken": []
@@ -450,7 +1296,17 @@
             }
           },
           "404": {
-            "description": "Unknown file or wrong token",
+            "description": "Unknown file or wrong token (same response, to prevent ID enumeration)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Storage backend error",
             "content": {
               "application/json": {
                 "schema": {
@@ -462,24 +1318,91 @@
         }
       }
     },
-    "/dl/{id}/{filename}": {
-      "get": {
-        "summary": "Download file (always as attachment)",
-        "operationId": "directDownload",
-        "description": "Same as `GET /files/{id}?dl=1`. The filename segment is optional and cosmetic. Password-protected files accept Basic auth or the unlock cookie.",
-        "security": [
-          {},
-          {
-            "filePassword": []
-          }
+    "/mcp": {
+      "post": {
+        "tags": [
+          "MCP"
         ],
+        "summary": "MCP Streamable HTTP (JSON-RPC)",
+        "operationId": "mcp",
+        "description": "Model Context Protocol endpoint for AI assistants. Tools:\n\n- `upload_file(filename, content (base64), content_type?, expires_in?, password?, disposition?)` → `file_id`, `management_token`, `manage_url`, `download_url`, `direct_download_url`, `expires_at`, `filename`, `size_bytes`, `password_protected`\n- `get_file_info(file_id, management_token)` → same fields as `GET /api/files/{id}`\n- `delete_file(file_id, management_token)` → `deleted`, `file_id`\n\nStart with `initialize`; send the returned `Mcp-Session-Id` header on later requests. Request bodies are limited to 16 MiB (about 12 MB of file content after base64); use tus for larger files. Full instructions: [/llms.txt](/llms.txt).",
         "parameters": [
           {
-            "$ref": "#/components/parameters/id"
+            "name": "Mcp-Session-Id",
+            "in": "header",
+            "description": "Session ID from the initialize response",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                  "name": "upload_file",
+                  "arguments": {
+                    "filename": "hello.txt",
+                    "content": "aGVsbG8=",
+                    "expires_in": "1h"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "JSON-RPC response",
+            "headers": {
+              "Mcp-Session-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
+          "400": {
+            "description": "Malformed JSON-RPC or unknown session"
+          },
+          "413": {
+            "description": "Request body larger than 16 MiB"
+          },
+          "429": {
+            "description": "Too many concurrent MCP requests from this IP or overall"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "MCP"
+        ],
+        "summary": "MCP server-to-client event stream",
+        "operationId": "mcpStream",
+        "parameters": [
           {
-            "name": "filename",
-            "in": "path",
+            "name": "Mcp-Session-Id",
+            "in": "header",
             "required": true,
             "schema": {
               "type": "string"
@@ -488,46 +1411,105 @@
         ],
         "responses": {
           "200": {
-            "description": "File content with Content-Disposition: attachment",
+            "description": "Server-sent events",
             "content": {
-              "*/*": {
+              "text/event-stream": {
                 "schema": {
-                  "type": "string",
-                  "format": "binary"
+                  "type": "string"
                 }
               }
             }
-          },
-          "206": {
-            "description": "Partial content"
-          },
-          "401": {
-            "description": "Password required"
-          },
-          "404": {
-            "description": "File not found or expired"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "MCP"
+        ],
+        "summary": "End an MCP session",
+        "operationId": "mcpEndSession",
+        "parameters": [
+          {
+            "name": "Mcp-Session-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session ended"
           }
         }
       }
     },
-    "/mcp": {
-      "post": {
-        "summary": "MCP Streamable HTTP endpoint",
-        "description": "Model Context Protocol endpoint for AI assistants. Supports upload_file, get_file_info, and delete_file tools.",
-        "operationId": "mcp",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object"
+    "/health": {
+      "get": {
+        "tags": [
+          "Service"
+        ],
+        "summary": "Health check",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    }
+                  }
+                }
               }
             }
           }
-        },
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": [
+          "Service"
+        ],
+        "summary": "This OpenAPI document",
+        "operationId": "getOpenAPI",
         "responses": {
           "200": {
-            "description": "MCP response"
+            "description": "OpenAPI 3.1 document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/llms.txt": {
+      "get": {
+        "tags": [
+          "Service"
+        ],
+        "summary": "Instructions for AI assistants",
+        "operationId": "getLLMsTxt",
+        "responses": {
+          "200": {
+            "description": "Plain-text usage guide",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       }
@@ -538,12 +1520,12 @@
       "managementToken": {
         "type": "http",
         "scheme": "bearer",
-        "description": "The management token returned in the `Upload-Management-Token` header when the upload was created (or by the MCP `upload_file` tool)."
+        "description": "Management token from the `Upload-Management-Token` header (tus) or `management_token` (MCP). For `DELETE /files/{id}` it may also be sent in the `Upload-Management-Token` header."
       },
       "filePassword": {
         "type": "http",
         "scheme": "basic",
-        "description": "For password-protected files: send the password as the Basic auth password (username is ignored), e.g. `curl -u :secret`."
+        "description": "Password of a protected file as the Basic auth password; the username is ignored (`curl -u :secret`)."
       }
     },
     "parameters": {
@@ -551,9 +1533,31 @@
         "name": "id",
         "in": "path",
         "required": true,
-        "description": "Upload ID from the `Location` header. The part before `+` alone also works for GET, DELETE and the management API.",
+        "description": "Upload ID. Either the object ID (`/files/{objectId}/…` in share links) or the full tus ID from `Location` (`{objectId}+{multipartId}`).",
         "schema": {
           "type": "string"
+        },
+        "example": "0b5d4e8f608768ca0189eb430e63f513"
+      },
+      "filename": {
+        "name": "filename",
+        "in": "path",
+        "required": true,
+        "description": "Cosmetic filename; ignored when serving.",
+        "schema": {
+          "type": "string"
+        },
+        "example": "report.pdf"
+      },
+      "tusResumable": {
+        "name": "Tus-Resumable",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "1.0.0"
+          ]
         }
       }
     },
@@ -562,7 +1566,8 @@
         "type": "object",
         "properties": {
           "file_id": {
-            "type": "string"
+            "type": "string",
+            "description": "Full upload ID"
           },
           "filename": {
             "type": "string"
@@ -574,15 +1579,22 @@
             "type": "integer"
           },
           "complete": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Whether all bytes have been received"
           },
           "download_url": {
-            "type": "string"
+            "type": "string",
+            "format": "uri",
+            "description": "Share link: `/files/{objectId}/{filename}`"
+          },
+          "direct_download_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Always downloads: `/dl/{objectId}/{filename}`"
           },
           "expires_at": {
             "type": "string",
-            "format": "date-time",
-            "description": "Empty until the upload completes"
+            "description": "RFC 3339 time; empty until the upload completes"
           },
           "disposition": {
             "type": "string",
@@ -593,11 +1605,19 @@
           },
           "password_protected": {
             "type": "boolean"
-          },
-          "direct_download_url": {
-            "type": "string",
-            "description": "Link that always downloads (/dl/\u2026)"
           }
+        },
+        "example": {
+          "file_id": "0b5d4e8f608768ca0189eb430e63f513+01M3H2KRTJPDWG3V1WKSM5V8G2",
+          "filename": "report.pdf",
+          "content_type": "application/pdf",
+          "size_bytes": 48213,
+          "complete": true,
+          "download_url": "https://share.mk/files/0b5d4e8f608768ca0189eb430e63f513/report.pdf",
+          "direct_download_url": "https://share.mk/dl/0b5d4e8f608768ca0189eb430e63f513/report.pdf",
+          "expires_at": "2026-10-04T12:00:00Z",
+          "disposition": "inline",
+          "password_protected": false
         }
       },
       "Error": {
@@ -606,6 +1626,9 @@
           "error": {
             "type": "string"
           }
+        },
+        "example": {
+          "error": "file not found"
         }
       }
     }

@@ -14,7 +14,7 @@ Connect to `https://share.mk/mcp` and use the built-in tools:
 
 | Tool | What it does |
 |---|---|
-| `upload_file` | Upload base64-encoded file → returns `download_url` + `management_token`. Optional `password`, `disposition` |
+| `upload_file` | Upload base64-encoded file (≈12 MB max) → returns `download_url` (share link), `direct_download_url`, `manage_url` and `management_token`. Optional `password`, `expires_in`, `disposition` |
 | `get_file_info` | Fetch metadata (requires `management_token`) |
 | `delete_file` | Delete file (requires `management_token`) |
 
@@ -41,10 +41,11 @@ curl -X PATCH "https://share.mk/files/{id}" \
 # → Upload-Manage-URL: https://share.mk/manage/{objectId}#{token}
 # → Upload-Share-URL:  https://share.mk/files/{objectId}/report.pdf   (link to share)
 
-# 3. Download
-curl https://share.mk/files/{id} -o report.pdf
+# 3. Download (curl gets the file; browsers may get the preview or download page)
+curl https://share.mk/files/{objectId}/report.pdf -o report.pdf
 
-# 4. Delete before expiry
+# 4. Info / delete before expiry
+curl https://share.mk/api/files/{id} -H "Authorization: Bearer {token}"
 curl -X DELETE https://share.mk/api/files/{id} -H "Authorization: Bearer {token}"
 ```
 
@@ -55,26 +56,33 @@ Upload metadata keys (values base64-encoded):
 | `filename` | original filename |
 | `filetype` | MIME type |
 | `expires-in` | `1h`, `6h`, `24h` (default), `7d`, `30d` |
-| `disposition` | `inline` (default) or `attachment` |
+| `disposition` | `inline` (default) or `attachment` (never preview; browsers get the download page) |
 | `password` | optional; required to download (only a hash is stored) |
 
 ### Preview vs. download
 
-Share links have the form `/files/{objectId}/{filename}`; the filename is cosmetic (tab titles,
-PDF viewer, "Save as") and `/files/{id}` works too.
-Links open in the browser for images, video (with seeking), audio, PDF and plain text (UTF-8 by default).
-HTML, SVG source and code are shown as plain text, never executed. Everything else downloads.
-`disposition: attachment` at upload, or `?dl=1` on any link, forces a download. `/dl/{objectId}/{filename}`
-always downloads too (returned as `direct_download_url` by MCP and the info API).
-When a browser opens the share link of a file that can't be previewed (or was uploaded with
-`disposition: attachment`), it gets a page with the filename, size, expiry and a Download button;
-API clients such as curl still receive the file itself.
-All downloads are sent with a sandboxing `Content-Security-Policy` and `nosniff`.
+Every upload gets two public links:
+
+| Link | Behaviour |
+|---|---|
+| `/files/{objectId}/{filename}` (share link) | Images, video (with seeking), audio and PDF open in the browser. Text, HTML, SVG source and code show as plain text (UTF-8), never executed. Other files — and uploads with `disposition: attachment` — show a page with the filename, size, expiry and a Download button. Non-browser clients (curl, scripts, AI tools) always get the file itself. |
+| `/dl/{objectId}/{filename}` (direct download) | Always downloads. `?dl=1` on any link does the same. |
+
+The filename segment is cosmetic (tab titles, PDF viewer, "Save as"); `/files/{id}` works too.
+Downloads carry `nosniff` and a restrictive `Content-Security-Policy`.
 
 ### Password-protected files
 
-Browsers get a password form; after unlocking, a cookie scoped to that file keeps it open for 12h.
-API clients send the password with HTTP Basic auth: `curl -u :secret https://share.mk/files/{id}`.
+Browsers get a password form; after unlocking, a per-file cookie keeps it open (share link and
+direct download) for 12h. API clients send the password with HTTP Basic auth:
+`curl -u :secret https://share.mk/dl/{objectId}/file.zip -o file.zip`.
+
+### Limits
+
+- Max file size 10 GiB via tus; about 12 MB via MCP (16 MiB request cap)
+- Expiry: `1h`, `6h`, `24h` (default), `7d`, `30d`; expired files are removed within ~10 minutes
+- Concurrent uploads: 5 per IP / 50 overall; MCP: 2 per IP / 10 overall (HTTP 429 beyond that)
+- Unfinished uploads idle for 48h are removed
 
 Interactive API docs: [share.mk/docs](https://share.mk/docs)
 

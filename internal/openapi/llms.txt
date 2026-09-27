@@ -1,52 +1,60 @@
 # share.mk
 
-> Anonymous, zero-signup file sharing with automatic expiry. No account needed. Files are stored on Scaleway S3 and deleted automatically.
+> Anonymous, zero-signup file sharing with automatic expiry. No account needed. Files are stored on S3 (Scaleway) and deleted automatically when they expire.
 
 ## Quick start for AI assistants
 
-The easiest way to use share.mk from an AI assistant is via the built-in MCP (Model Context Protocol) server.
+The easiest way to share a file from an AI assistant is the built-in MCP (Model Context Protocol) server.
 
-MCP endpoint: https://share.mk/mcp
+MCP endpoint (Streamable HTTP): https://share.mk/mcp
 
 ### MCP tools
 
-**upload_file** — Upload a file and get back a download URL
+**upload_file** — Upload a file and get back links to share
 
 Parameters:
 - filename (required): original filename, e.g. "report.pdf"
 - content (required): base64-encoded file content (standard or URL-safe encoding)
-- content_type (optional): MIME type — defaults to application/octet-stream
+- content_type (optional): MIME type, e.g. "application/pdf" — defaults to application/octet-stream.
+  Set it correctly: it decides whether the link previews in the browser.
 - expires_in (optional): 1h | 6h | 24h | 7d | 30d — defaults to 24h
-- disposition (optional): "inline" (default) — images, video, audio, PDF and text open in the browser;
-  "attachment" — the link always downloads
-- password (optional): password required to download the file
+- password (optional): password required to open the file. Share it separately from the link.
+- disposition (optional): "inline" (default) or "attachment". "attachment" never previews the file:
+  browsers get a download page, other clients get the file as an attachment.
 
-Returns: { "file_id", "management_token", "manage_url", "download_url", "expires_at", "filename", "size_bytes", "password_protected" }
+Returns:
+{ "file_id", "management_token", "manage_url", "download_url", "direct_download_url",
+  "expires_at", "filename", "size_bytes", "password_protected" }
 
-IMPORTANT: Save the management_token (or manage_url) — it is only returned once and is required to call
-get_file_info or delete_file. Downloads via the download_url need no token; if a password was set,
-share it separately from the link.
+- download_url — the link to share (https://share.mk/files/{objectId}/{filename}). Opens in the browser
+  for previewable files; otherwise shows a page with the filename, size, expiry and a Download button.
+- direct_download_url — always downloads (https://share.mk/dl/{objectId}/{filename}).
+- manage_url — web page where the uploader can view and delete the file.
+
+IMPORTANT: Save the management_token (or manage_url). It is returned only once and is required for
+get_file_info and delete_file. Nobody else needs it to download the file.
+
+Size limit: MCP requests are capped at 16 MiB, which is about 12 MB of file content after base64
+encoding. For larger files use the REST (tus) upload below.
 
 ---
 
-**get_file_info** — Look up metadata for an uploaded file
-
-Requires the management_token issued at upload time to prove ownership.
+**get_file_info** — Look up an uploaded file
 
 Parameters:
-- file_id (required): the ID returned by upload_file
+- file_id (required): the file_id returned by upload_file
 - management_token (required): the token returned by upload_file
 
-Returns: { "file_id", "filename", "content_type", "size_bytes", "complete", "download_url", "expires_at", "disposition", "password_protected" }
+Returns:
+{ "file_id", "filename", "content_type", "size_bytes", "complete", "download_url",
+  "direct_download_url", "expires_at", "disposition", "password_protected" }
 
 ---
 
-**delete_file** — Permanently delete an uploaded file
-
-Requires the management_token issued at upload time to prove ownership.
+**delete_file** — Permanently delete an uploaded file before it expires
 
 Parameters:
-- file_id (required): the ID returned by upload_file
+- file_id (required): the file_id returned by upload_file
 - management_token (required): the token returned by upload_file
 
 Returns: { "deleted": true, "file_id" }
@@ -58,61 +66,85 @@ Returns: { "deleted": true, "file_id" }
 Interactive docs: https://share.mk/docs
 OpenAPI 3.1 spec: https://share.mk/openapi.json
 
-Files are uploaded using the resumable upload protocol. Uploads are created with POST, data is sent with PATCH, and completed files are downloaded with GET.
+Uploads use the tus resumable upload protocol (https://tus.io): create the upload with POST,
+send the bytes with PATCH, resume after interruptions by reading the offset with HEAD.
 
 ### Upload-Metadata header
 
-Values are base64-encoded key=value pairs, comma-separated:
+Comma-separated `key base64(value)` pairs:
 
 - filename — original filename
 - filetype — MIME type
-- expires-in — one of: 1h, 6h, 24h, 7d, 30d (defaults to 24h)
-- disposition — inline (default) or attachment
-- password — optional download password
+- expires-in — 1h, 6h, 24h (default), 7d, 30d
+- password — optional download password (only a hash is stored)
+- disposition — optional: inline (default) or attachment
 
-The 201 response includes an `Upload-Management-Token` header (shown once), an
-`Upload-Manage-URL` header (web page to delete the file) and an `Upload-Share-URL` header
-(the link to share, e.g. https://share.mk/files/{objectId}/report.pdf). Keep them.
+Invalid values are rejected with 400 and no upload is created.
+
+The 201 response headers:
+- Location — tus upload URL for PATCH/HEAD
+- Upload-Share-URL — the link to share (https://share.mk/files/{objectId}/{filename})
+- Upload-Management-Token — secret token, shown only once; keep it to delete the file early
+- Upload-Manage-URL — web page to view and delete the file (token in the URL fragment)
 
 ### Example (curl)
 
 ```bash
-# 1. Create upload (set Upload-Length to file size in bytes)
+# 1. Create the upload
 curl -D - -X POST https://share.mk/files/ \
   -H "Tus-Resumable: 1.0.0" \
-  -H "Upload-Length: 1234" \
-  -H "Upload-Metadata: filename cmVwb3J0LnBkZg==,expires-in MjRo"
+  -H "Upload-Length: $(wc -c < report.pdf)" \
+  -H "Upload-Metadata: filename $(printf report.pdf | base64),filetype $(printf application/pdf | base64),expires-in $(printf 7d | base64)"
 # → Location: https://share.mk/files/{id}
+# → Upload-Share-URL: https://share.mk/files/{objectId}/report.pdf
+# → Upload-Management-Token: {token}
 
-# 2. Send the file bytes
-curl -X PATCH https://share.mk/files/{id} \
+# 2. Send the bytes
+curl -X PATCH "https://share.mk/files/{id}" \
   -H "Tus-Resumable: 1.0.0" \
   -H "Upload-Offset: 0" \
   -H "Content-Type: application/offset+octet-stream" \
   --data-binary @report.pdf
 
-# 3. Download (add ?dl=1 to force a download; -u :password for protected files)
-curl https://share.mk/files/{id} -o report.pdf
+# 3. Download (curl always receives the file itself)
+curl -o report.pdf https://share.mk/files/{objectId}/report.pdf
 
-# 4. Delete early (token from the Upload-Management-Token header)
+# 4. File info / delete early
+curl https://share.mk/api/files/{id} -H "Authorization: Bearer {token}"
 curl -X DELETE https://share.mk/api/files/{id} -H "Authorization: Bearer {token}"
 ```
 
-### Viewing in the browser
+`{id}` can be the object ID from the share link or the full ID from Location.
 
-Images, video (with seeking), audio, PDF and plain text open directly in the browser.
-HTML, SVG source and code are shown as plain text. Anything else downloads.
-Append ?dl=1 to any link to force a download, or use /dl/{objectId}/{filename}
-(direct_download_url). Browsers opening a non-previewable file get a small page with the
-filename, size, expiry and a Download button; non-browser clients get the file bytes.
+### Links and how files open
+
+- https://share.mk/files/{objectId}/{filename} — share link. The filename part is cosmetic.
+  - Images, video (with seeking), audio and PDF open in the browser.
+  - Text, HTML, SVG source and code are shown as plain text (UTF-8), never executed.
+  - Other files (and uploads with disposition=attachment): browsers get a page with the filename,
+    size, expiry and a Download button; non-browser clients (curl, scripts, AI tools) get the bytes.
+- https://share.mk/dl/{objectId}/{filename} — always downloads. Adding ?dl=1 to any link does the same.
+- Deleted files return 404 (an HTML "File not available" page in browsers). Expired files are
+  removed within about 10 minutes of their expiry time.
+
+### Password-protected files
+
+- Browsers get a password form; after unlocking, the file stays open in that browser for 12 hours.
+- API clients send the password with HTTP Basic auth (any username):
+  curl -u :secret -o file.zip https://share.mk/dl/{objectId}/file.zip
 
 ### Management API
 
-- GET /api/files/{id} — file info (Authorization: Bearer {token})
-- DELETE /api/files/{id} — delete the file (Authorization: Bearer {token})
+Authenticate with the management token: `Authorization: Bearer {token}`.
+
+- GET /api/files/{id} — file info (same fields as get_file_info)
+- DELETE /api/files/{id} — delete the file (also aborts an unfinished upload)
+- DELETE /files/{id} — same, for tus clients (the token may also go in the Upload-Management-Token header)
 
 ## Limits
 
-- Max file size: 10 GiB
-- Max concurrent uploads per IP: 5
+- Max file size: 10 GiB (tus); about 12 MB via MCP
 - Expiry options: 1h, 6h, 24h (default), 7d, 30d
+- Concurrent uploads: 5 per IP, 50 overall (HTTP 429 when exceeded)
+- MCP: 2 concurrent requests per IP, 10 overall
+- Unfinished uploads idle for 48 hours are removed
