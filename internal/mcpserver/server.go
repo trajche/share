@@ -52,7 +52,11 @@ func New(cfg *config.Config, fs *files.Service) *MCPServer {
 // Request bodies are capped at MCPMaxBodyBytes because tool arguments
 // (base64 file content) are decoded in memory.
 func (ms *MCPServer) Handler() http.Handler {
-	next := server.NewStreamableHTTPServer(ms.mcp)
+	// mcp-go's DNS rebinding protection rejects loopback connections whose
+	// Host header is not loopback. It is meant for local-only MCP servers;
+	// share.mk is public and sits behind a reverse proxy on loopback, so
+	// every legitimate request would be refused.
+	next := server.NewStreamableHTTPServer(ms.mcp, server.WithDisableLocalhostProtection(true))
 	limit := ms.cfg.MCPMaxBodyBytes
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ContentLength > limit {

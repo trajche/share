@@ -524,6 +524,9 @@ func (e *env) mcp() *mcpSession {
 
 func (s *mcpSession) post(body string) *http.Response {
 	req, _ := http.NewRequest(http.MethodPost, s.e.srv.URL+"/mcp", strings.NewReader(body))
+	// Production traffic arrives from the reverse proxy over loopback with
+	// the public Host header; mcp-go rejects that combination by default.
+	req.Host = "share.test"
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	if s.sid != "" {
